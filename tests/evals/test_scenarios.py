@@ -14,7 +14,18 @@ from gharmitra.agent.sanitize import HIDDEN_REVIEW
 from gharmitra.config import Limits
 from gharmitra.mock_api import seed_data as sd
 from tests.evals.harness import (
-    MORNING, NO, NO_PREF, PLUMBER_REQUEST, THIS_WEEK, YES, book, days, inform, make_world, memory, pick,
+    MORNING,
+    NO,
+    NO_PREF,
+    PLUMBER_REQUEST,
+    THIS_WEEK,
+    YES,
+    book,
+    days,
+    inform,
+    make_world,
+    memory,
+    pick,
     rate_limited,
 )
 
@@ -525,16 +536,43 @@ def test_e26_stale_approval(schemas, record):
     record.check()
 
 
+CANCEL_CLEANING = {"act": "request", "goal": "cancel", "target": {"service": "cleaning"}, "confidence": 0.9}
+
+
 @eval_("E27", "Cancel 30 h before", "No fee; refunds row and receipt written after verification")
-@pytest.mark.skip(reason="tier 2: step 14 (cancellation policy and receipts)")
 def test_e27_cancel_30h(schemas, record):
-    pass
+    ev = record.world(make_world(schemas))
+    ev.new_session()
+    ev.say("Cancel my cleaning booking", CANCEL_CLEANING)  # BK-905 is Tue 3 Nov 15:00, 30 h away
+    assert [a["amount"] for a in ev.approvals()] == [180000]
+    reply = ev.say("yes", YES)
+    assert reply.exit == "completed"
+    assert ev.db.one("select amount, fee from refunds where booking_id = 'BK-905'") == {"amount": 180000, "fee": 0}
+    receipt = ev.db.one("select * from receipts where booking_id = 'BK-905'")
+    assert receipt["kind"] == "cancel" and receipt["data"]["fee"] == 0 and receipt["data"]["tier"] == "free"
+    assert receipt["receipt_no"] in reply.text
+    record.check()
 
 
 @eval_("E28", "Cancel approved at 24 h 01 m, executed after 24 h", "Approval voided; ₹100 fee shown in a new approval")
-@pytest.mark.skip(reason="tier 2: step 14 (cancellation policy and receipts)")
 def test_e28_cancel_fee_tier(schemas, record):
-    pass
+    ev = record.world(make_world(schemas, crash={"after_write_ahead"}))
+    ev.clock.advance(hours=5, minutes=59)  # Mon 14:59: 24 h 01 m before the 15:00 slot
+    ev.new_session()
+    ev.say("Cancel my cleaning booking", CANCEL_CLEANING)
+    with pytest.raises(SimulatedCrash):  # approved, then the process dies before the cancel call
+        ev.say("yes", YES)
+    ev.world.restart()
+    ev.clock.advance(minutes=2)  # now 23 h 59 m before: the ₹100 tier
+    ev.say("yes", YES)  # recovery finds the fee changed; this "yes" predates the new approval
+    assert statuses(ev) == ["voided", "pending"] and not ev.tool_calls("cancel")
+    assert ev.approvals()[0]["status_reason"] == "gate_mismatch"
+    assert ev.approvals()[1]["amount"] == 170000
+    ev.say("yes", YES)
+    new_key = f"{ev.approvals()[1]['id']}:cancel"
+    assert {c["args"]["idempotency_key"] for c in ev.tool_calls("cancel")} == {new_key}  # never the old approval
+    assert ev.db.one("select amount, fee from refunds where booking_id = 'BK-905'") == {"amount": 170000, "fee": 10000}
+    record.check(notes="crash after the write-ahead row; resumed 2 min later")
 
 
 @eval_("E29", "Forget a fact", "Value absent from facts, fact_events, session task and trace")

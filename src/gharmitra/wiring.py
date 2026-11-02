@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from gharmitra.agent.cancellation import PolicyStore
 from gharmitra.agent.controller import Controller, Deps, Reply
 from gharmitra.agent.followup import provider_cancelled
 from gharmitra.catalogue import Catalogue, load_catalogue
 from gharmitra.clock import Clock, SystemClock
 from gharmitra.config import Limits, Settings, load_settings
-from gharmitra.db import Database, migrate, resolve_url
+from gharmitra.db import Database, jsonb, migrate, resolve_url
 from gharmitra.llm.base import ModelClient
 from gharmitra.llm.factory import make_model
 from gharmitra.llm.rules import RuleModel
@@ -53,6 +54,7 @@ def seed_agent(db: Database, clock: Clock, catalogue: Catalogue) -> None:
     if db.scalar("select count(*) from users"):
         return
     today = clock.now()
+    policies = PolicyStore(db, clock)
     with db.tx():
         for uid, name in ((sd.DEMO_USER, sd.DEMO_USER_NAME), (sd.NEW_USER, "New user")):
             db.execute("insert into users (id, name) values (%s, %s)", (uid, name))
@@ -60,9 +62,10 @@ def seed_agent(db: Database, clock: Clock, catalogue: Catalogue) -> None:
         for n, b in enumerate(sd.PAST_BOOKINGS):
             db.execute(
                 "insert into bookings (id, user_id, provider_id, provider_name, service, area, slot_start, price,"
-                " status, created_at, updated_at) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                " status, policy, created_at, updated_at) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (f"BK-{901 + n}", b.user_id, b.provider_id, names[b.provider_id], b.service, b.area,
-                 sd.past_slot(today, b), b.price * 100, b.status, today, today),
+                 sd.past_slot(today, b), b.price * 100, b.status, jsonb(policies.snapshot(b.provider_id)),
+                 today, today),
             )
 
 

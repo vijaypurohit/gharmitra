@@ -12,11 +12,13 @@ from collections.abc import Iterator
 from importlib import resources
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from gharmitra import receipts, report
+from gharmitra.agent.cancellation import PolicyStore
 from gharmitra.clock import SystemClock
 from gharmitra.config import Settings, load_settings
 from gharmitra.db import drop_schema
@@ -162,9 +164,43 @@ def create_app(settings: Settings | None = None, world: World | None = None) -> 
     @api.get("/api/bookings")
     def bookings(user_id: str = sd.DEMO_USER) -> list[dict]:
         rows = state.world.agent_db.all(
-            "select id, provider_name, service, slot_start, price, status from bookings where user_id = %s"
-            " order by slot_start desc", (user_id,))
-        return [{**r, "slot_start": r["slot_start"].isoformat(), "price": format_inr(r["price"])} for r in rows]
+            "select b.id, b.provider_id, b.provider_name, b.service, b.area, b.slot_start, b.price, b.status,"
+            " r.fee, r.amount as refund, r.credit,"
+            " (select array_agg(receipt_no order by created_at) from receipts where booking_id = b.id) as receipts"
+            " from bookings b left join refunds r on r.booking_id = b.id"
+            " where b.user_id = %s order by b.slot_start desc", (user_id,))
+        cat = state.world.catalogue
+        return [{**r, "slot_start": r["slot_start"].isoformat(), "price": format_inr(r["price"]),
+                 "service_label": cat.service_label(r["service"]),
+                 "fee": format_inr(r["fee"]) if r["fee"] is not None else None,
+                 "refund": format_inr(r["refund"]) if r["refund"] is not None else None,
+                 "credit": format_inr(r["credit"]) if r["credit"] else None,
+                 "receipts": r["receipts"] or []} for r in rows]
+
+    @api.get("/api/receipts/{receipt_no}", response_model=None)
+    def receipt(receipt_no: str, request: Request) -> dict | HTMLResponse | PlainTextResponse:
+        r = receipts.get(state.world.agent_db, receipt_no)
+        if r is None:
+            raise HTTPException(404, "unknown receipt")
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            return HTMLResponse(receipts.as_html(r))
+        if "text/plain" in accept:
+            return PlainTextResponse(receipts.as_text(r))
+        return receipts.as_json(r)
+
+    @api.get("/api/sessions/{session_id}/report")
+    def session_report(session_id: str) -> dict:
+        if state.world.controller.sessions.get(session_id) is None:
+            raise HTTPException(404, "unknown session")
+        events = report.load_events(state.world.agent_db, session_id)
+        r = report.build_report(events)
+        return {**r, "text": report.as_text(r)}
+
+    @api.get("/api/policy")
+    def policy() -> dict:
+        store = PolicyStore(state.world.agent_db, state.world.clock)
+        return {"platform": store.platform().to_dict(), "overrides": store.overrides()}
 
     @api.get("/api/memory")
     def memory(user_id: str = sd.DEMO_USER) -> list[dict]:

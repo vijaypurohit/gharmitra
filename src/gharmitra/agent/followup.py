@@ -10,13 +10,14 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from gharmitra import receipts
+from gharmitra.agent.cancellation import PolicyStore
 from gharmitra.agent.state import BookingRef, FieldValue
-from gharmitra.money import format_inr, rupees
+from gharmitra.money import format_inr
 
 if TYPE_CHECKING:
     from gharmitra.agent.controller import Controller, Reply, Turn
 
-CANCEL_CREDIT = rupees(100)  # mirrors the late-cancellation fee
 REPLACEMENT_DAYS = 2  # search the original day and the next two
 MAX_DAYS_AHEAD = 30
 
@@ -42,13 +43,21 @@ def _follow_up(c: Controller, t: Turn, copy: dict) -> None:
         return
 
     db, now = c.deps.db, t.clock.now()
+    credit = PolicyStore(db, t.clock).for_booking(copy["policy"] or None, copy["provider_id"]).provider_cancel_credit
+    key = f"provider_cancel:{booking_id}"
+    slot_iso = copy["slot_start"].astimezone(t.clock.tz).isoformat()
     with db.tx():
         db.execute("update bookings set status = 'provider_cancelled', updated_at = %s where id = %s", (now, booking_id))
         db.execute("insert into refunds (booking_id, amount, fee, credit, op_key, created_at)"
-                   " values (%s, %s, 0, %s, %s, %s)",
-                   (booking_id, copy["price"], CANCEL_CREDIT, f"provider_cancel:{booking_id}", now))
-    t.tracer.emit("refund", booking_id=booking_id, amount=copy["price"], fee=0, credit=CANCEL_CREDIT,
-                  reason="provider_cancelled")
+                   " values (%s, %s, 0, %s, %s, %s)", (booking_id, copy["price"], credit, key, now))
+        receipt_no = receipts.write(db, op_key=key, kind="provider_cancel", booking_id=booking_id, user_id=t.user, now=now,
+                                    data={"provider_id": copy["provider_id"], "provider_name": copy["provider_name"],
+                                          "service": copy["service"], "service_label": t.label(copy["service"]),
+                                          "slot": slot_iso, "slot_label": t.slot(slot_iso), "price": copy["price"],
+                                          "fee": 0, "refund": copy["price"], "credit": credit,
+                                          "policy_note": "Provider cancelled: full refund plus credit"})
+    t.tracer.emit("refund", booking_id=booking_id, amount=copy["price"], fee=0, credit=credit,
+                  reason="provider_cancelled", receipt_no=receipt_no)
 
     slot = copy["slot_start"].astimezone(t.clock.tz)
     today = now.astimezone(t.clock.tz).date()
@@ -72,7 +81,7 @@ def _follow_up(c: Controller, t: Turn, copy: dict) -> None:
 
     t.say(f"{copy['provider_name']} cancelled your {t.label(copy['service'])} booking for "
           f"{t.slot(slot.isoformat())} ({booking_id}). I've recorded a full refund of {format_inr(copy['price'])} "
-          f"and a {format_inr(CANCEL_CREDIT)} credit. I haven't booked anything else.")
+          f"and a {format_inr(credit)} credit (receipt {receipt_no}). I haven't booked anything else.")
     if not area:
         task.awaiting = "required"
         t.say("Which area should I look for a replacement in?")

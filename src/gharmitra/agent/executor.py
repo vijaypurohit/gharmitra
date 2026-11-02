@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from gharmitra import receipts
 from gharmitra.agent.approval import ApprovalError, Approvals, Values
 from gharmitra.agent.tools import Tools
 from gharmitra.clock import Clock
 from gharmitra.config import Limits
-from gharmitra.db import Database
+from gharmitra.db import Database, jsonb
 from gharmitra.mock_api.provider import ServiceUnavailable, ToolError, ToolTimeout
 from gharmitra.trace import Tracer
 
@@ -36,6 +37,7 @@ class Outcome:
     booking_id: str | None = None
     error: str | None = None
     resumed: bool = False
+    receipt_no: str | None = None
 
 
 def op_key(approval_id: str, action: str) -> str:
@@ -188,32 +190,44 @@ class Executor:
         with self.db.tx():
             op = self._set(op, status="succeeded", booking_id=booking_id)
             self.approvals.consume(op["approval_id"])
-            self._record(v, booking_id, op["op_key"])
-        return Outcome("succeeded", v.action, op["approval_id"], op["op_key"], booking_id=booking_id)
+            receipt_no = self._record(v, booking_id, op["op_key"])
+        self.tracer.emit("receipt", receipt_no=receipt_no, op_key=op["op_key"], kind=v.action, booking_id=booking_id)
+        return Outcome("succeeded", v.action, op["approval_id"], op["op_key"], booking_id=booking_id,
+                       receipt_no=receipt_no)
 
-    def _record(self, v: Values, booking_id: str | None, key: str) -> None:
-        """The agent's copy of the booking, written with the operation's success."""
+    def _record(self, v: Values, booking_id: str | None, key: str) -> str:
+        """The agent's copy of the booking and its receipt, written with the operation's success."""
         now = self.clock.now()
         m = v.meta
+        data = {"provider_id": v.provider_id, "provider_name": m.get("provider_name", v.provider_id),
+                "service": m.get("service", ""), "service_label": m.get("service_label", ""),
+                "slot": v.slot, "slot_label": m.get("slot_label", v.slot)}
         if v.action == "book":
             self.db.execute(
                 "insert into bookings (id, user_id, provider_id, provider_name, service, area, slot_start, price,"
                 " status, policy, op_key, created_at, updated_at)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, 'booked', '{}', %s, %s, %s) on conflict (id) do nothing",
-                (booking_id, m["user_id"], v.provider_id, m.get("provider_name", v.provider_id), m.get("service", ""),
-                 m.get("area"), datetime.fromisoformat(v.slot), v.amount, key, now, now),
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, 'booked', %s, %s, %s, %s) on conflict (id) do nothing",
+                (booking_id, m["user_id"], v.provider_id, data["provider_name"], data["service"],
+                 m.get("area"), datetime.fromisoformat(v.slot), v.amount, jsonb(m.get("policy", {})), key, now, now),
             )
+            data["price"] = v.amount
         elif v.action == "cancel":
             self.db.execute("update bookings set status = 'cancelled', updated_at = %s where id = %s", (now, booking_id))
             self.db.execute(
                 "insert into refunds (booking_id, amount, fee, op_key, created_at) values (%s, %s, %s, %s, %s)",
                 (booking_id, v.amount, m.get("fee", 0), key, now),
             )
+            data.update(price=m.get("price", v.amount), fee=m.get("fee", 0), refund=v.amount,
+                        tier=m.get("tier"), policy_note=m.get("policy_note"))
         else:
             self.db.execute(
                 "update bookings set slot_start = %s, updated_at = %s where id = %s",
                 (datetime.fromisoformat(v.slot), now, booking_id),
             )
+            data.update(price=v.amount, previous_slot=m.get("previous_slot"),
+                        previous_slot_label=m.get("previous_slot_label"))
+        return receipts.write(self.db, op_key=key, kind=v.action, booking_id=booking_id or "",
+                              user_id=m["user_id"], data=data, now=now)
 
     def _fail(self, op: dict, reason: str) -> Outcome:
         with self.db.tx():

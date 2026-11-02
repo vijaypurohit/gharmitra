@@ -195,15 +195,20 @@ seq type              payload (shortened)
  43 tool_call         get_booking_status(apr_1:book) → booked BK-1001 ← checked, not retried
  44 operation         succeeded apr_1:book BK-1001
  45 approval          consumed apr_1
- 48 exit              completed (1 model call, 2 tool calls)         ← one book call, one booking
+ 46 receipt           GM-20261102-0001 apr_1:book                    ← only after verification
+ 49 exit              completed (1 model call, 2 tool calls)         ← one book call, one booking
 ```
 
 ## 10. Cancellation policy and provider cancels
 
 Platform default, overridable per provider and snapshotted on each booking: ≥ 24 h before the slot
 free; 3–24 h ₹100; < 3 h 50%; provider cancels → full refund + ₹100 credit (mirrors the late fee, per
-the Consumer Protection (E-Commerce) Rules, 2020). The refund is in the cancel fingerprint, so
-crossing a tier voids the approval. Rescheduling ≥ 3 h before is free; later it's cancel-and-rebook.
+the Consumer Protection (E-Commerce) Rules, 2020). Policy and overrides live in `agent/cancellation.py`
+and the `settings` table. The refund is computed from the clock at each check and is in the cancel
+fingerprint, so crossing a tier voids the approval: at confirm time (`values_changed`) or at the gate
+on a resumed call (`gate_mismatch`, E28). Either way the user gets a new approval showing the fee. A
+"yes" in the same message that produced a new approval does not grant it. Rescheduling ≥ 3 h before
+is free; later it's cancel-and-rebook; after the slot starts there is no cancel.
 The `provider_cancels(booking_id)` demo hook triggers the follow-up (`agent/followup.py`) as a turn
 with no user message. The agent first checks with `list_bookings` that the provider really cancelled
 (an unconfirmed notice changes nothing), records the refund and credit once, then searches the same
@@ -242,6 +247,8 @@ Schema in [migrations/](../src/gharmitra/migrations/). Money is `bigint` paise, 
   take no user id). Prices cross the API in whole rupees; the agent keeps paise.
 - Each provider has four seeded slots a day between 08:00 and 18:00; a slot within the next hour
   can't be held.
+- Fees are exact to the paisa (50% of ₹799 is ₹399.50). Credit is recorded, not spent; nothing redeems it.
+- A provider-cancel notice opens a new session, so it never disturbs a task the user has in progress.
 
 ## 13. What breaks first at 100×
 

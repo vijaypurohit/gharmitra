@@ -208,6 +208,15 @@ def check_invariants(ev: EvalWorld) -> list[str]:
     if len(claims) > len(succeeded_keys):
         problems.append(f"I3: {len(claims)} success messages for {len(succeeded_keys)} verified operations")
 
+    succeeded_at = {e["payload"]["op_key"]: n for n, e in enumerate(events)
+                    if e["type"] == "operation" and e["payload"]["status"] == "succeeded"}
+    for n, e in enumerate(events):
+        if e["type"] == "receipt" and succeeded_at.get(e["payload"]["op_key"], n + 1) > n:
+            problems.append(f"I3: receipt {e['payload']['receipt_no']} before its operation was verified")
+    receipt_keys = [r["op_key"] for r in ev.db.all("select op_key from receipts where op_key not like 'provider_cancel:%%'")]
+    if sorted(receipt_keys) != sorted(succeeded_keys):
+        problems.append(f"I3: receipts {receipt_keys} differ from verified operations {succeeded_keys}")
+
     # I4: caps respected; every exit is followed by a message; at most one exit per turn.
     lim = ev.controller.deps.limits
     for b in ev.events("budget"):
@@ -216,7 +225,7 @@ def check_invariants(ev: EvalWorld) -> list[str]:
             problems.append(f"I4: budget exceeded {p}")
     turn_exits = 0
     for n, e in enumerate(events):
-        if e["type"] == "user_msg":
+        if e["type"] in ("user_msg", "followup"):
             turn_exits = 0
         if e["type"] == "exit":
             turn_exits += 1

@@ -63,3 +63,22 @@ def test_provider_cancels_demo_hook(schemas):
     assert chat(c, r["session_id"], "1")["approval"]  # the replacement goes through the normal approval
     statuses = {b["id"]: b["status"] for b in c.get("/api/bookings").json()}
     assert statuses["BK-905"] == "provider_cancelled"
+
+
+def test_receipt_report_and_policy_endpoints(schemas):
+    c, _ = client(schemas)
+    sid = c.post("/api/sessions", json={"user_id": "u-demo"}).json()["session_id"]
+    chat(c, sid, "Cancel my cleaning booking")
+    done = chat(c, sid, "yes")
+    assert done["exit"] == "completed"
+    cleaning = next(b for b in c.get("/api/bookings").json() if b["id"] == "BK-905")
+    assert cleaning["status"] == "cancelled" and cleaning["fee"] == "₹0" and cleaning["refund"] == "₹1,800"
+    no = cleaning["receipts"][0]
+    assert no in done["messages"][0]
+    assert c.get(f"/api/receipts/{no}").json()["refund"] == 180000
+    assert "<table>" in c.get(f"/api/receipts/{no}", headers={"Accept": "text/html"}).text
+    assert "Refund" in c.get(f"/api/receipts/{no}", headers={"Accept": "text/plain"}).text
+    assert c.get("/api/receipts/GM-NOPE").status_code == 404
+    rep = c.get(f"/api/sessions/{sid}/report").json()
+    assert rep["turns"] == 2 and rep["receipts"] == [no] and "Receipts:" in rep["text"]
+    assert c.get("/api/policy").json()["platform"]["late_fee"] == 10000

@@ -12,7 +12,8 @@ from gharmitra.clock import Clock
 from gharmitra.db import Database, jsonb
 
 REDACTED = "[redacted]"
-_SECRET_KEY = re.compile(r"(api[_-]?key|authorization|token|secret|password|cookie)", re.I)
+# "token" only as the last word of a key (token, access_token), so usage counts like input_tokens stay.
+_SECRET_KEY = re.compile(r"(api[_-]?key|authorization|secret|password|cookie|(?:^|[_-])token$)", re.I)
 _PATTERNS = [
     (re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+"), "Bearer " + REDACTED),
     (re.compile(r"\b(sk|sk-ant|xai|gsk|AIza)[-_A-Za-z0-9]{16,}"), REDACTED),

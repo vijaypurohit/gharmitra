@@ -8,7 +8,7 @@ from gharmitra.agent.approval import ApprovalError, Approvals, Values, fingerpri
 from gharmitra.agent.budget import Budget, LimitExceeded
 from gharmitra.agent.executor import Executor, SimulatedCrash
 from gharmitra.agent.sanitize import HIDDEN_REVIEW, Sanitizer, clean, is_suspicious
-from gharmitra.agent.state import IllegalTransition, Phase, SessionStore, Task, FieldValue, check_transition
+from gharmitra.agent.state import FieldValue, IllegalTransition, Phase, SessionStore, Task, check_transition
 from gharmitra.agent.tools import Tools
 from gharmitra.config import Limits
 from gharmitra.memory.store import MemoryStore

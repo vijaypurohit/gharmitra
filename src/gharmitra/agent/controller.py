@@ -14,13 +14,25 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from gharmitra.agent.approval import ApprovalError, Approvals, Values
+from gharmitra.agent.approval import ApprovalError, Approvals, Values, fingerprint
 from gharmitra.agent.budget import Budget, LimitExceeded
+from gharmitra.agent.cancellation import PolicyStore, can_reschedule, quote
 from gharmitra.agent.executor import Executor, Outcome
 from gharmitra.agent.intents import IntentParser, Parsed
 from gharmitra.agent.state import (
-    OPTIONAL, REQUIRED, SEARCH_INPUTS, TERMINAL, BookingRef, FieldValue, Hold, Option, Phase, Session,
-    SessionStore, Task, check_transition,
+    OPTIONAL,
+    REQUIRED,
+    SEARCH_INPUTS,
+    TERMINAL,
+    BookingRef,
+    FieldValue,
+    Hold,
+    Option,
+    Phase,
+    Session,
+    SessionStore,
+    Task,
+    check_transition,
 )
 from gharmitra.agent.tools import Tools
 from gharmitra.catalogue import Catalogue
@@ -32,7 +44,7 @@ from gharmitra.llm.rules import RuleModel
 from gharmitra.memory.store import MemoryStore, label
 from gharmitra.mock_api.provider import ProviderAPI, SlotUnavailable
 from gharmitra.money import format_inr, rupees
-from gharmitra.trace import Redactor, TraceSink, Tracer, next_seq
+from gharmitra.trace import Redactor, Tracer, TraceSink, next_seq
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +99,8 @@ class Turn:
         self.approvals = Approvals(c.deps.db, self.clock, tracer)
         self.executor = Executor(c.deps.db, self.approvals, self.clock, tracer, c.deps.limits, c.deps.crash_points)
         self.memory = MemoryStore(c.deps.db, self.clock, tracer)
+        self.policies = PolicyStore(c.deps.db, self.clock)
+        self.created_approvals: set[str] = set()  # shown this turn: a "yes" in the same message can't grant them
         self.out: list[str] = []
         self.card: dict[str, Any] | None = None
         self.exit_reason: str | None = None
@@ -704,6 +718,7 @@ class Controller:
         a = t.approvals.create(session_id=t.s.id, user_id=t.user, values=values, provider_name=provider_name,
                                summary=summary, expires_at=expires)
         t.task.approval_id = a["id"]
+        t.created_approvals.add(a["id"])
         t.task.awaiting = "confirm"
         t.go(Phase.AWAITING_APPROVAL, "approval_shown")
         self._show_card(t, a)
@@ -713,19 +728,27 @@ class Controller:
                   "amount": format_inr(a["amount"]), "expires_at": a["expires_at"].isoformat()}
 
     def _values_for(self, t: Turn, action: str) -> Values:
-        """The values about to be sent, computed from the task (never from the approval row)."""
+        """The values about to be sent, computed from the task and the clock (never from the approval row)."""
         task = t.task
-        meta = {"user_id": t.user}
+        meta: dict[str, Any] = {"user_id": t.user}
         if action == "book":
             h = task.hold
             assert h is not None
-            meta.update(provider_name=h.provider_name, service=task.value("service"), area=task.value("area"))
+            service = task.value("service")
+            meta.update(provider_name=h.provider_name, service=service, service_label=t.label(service),
+                        area=task.value("area"), slot_label=t.slot(h.slot), policy=t.policies.snapshot(h.provider_id))
             return Values("book", h.provider_id, h.slot, h.quoted_price, None, h.hold_id, meta)
         b = task.target
         assert b is not None
+        meta.update(provider_name=b.provider_name, service=b.service, service_label=t.label(b.service))
         if action == "cancel":
-            return Values("cancel", b.provider_id, b.slot, b.price or 0, b.id, None, {**meta, "fee": 0})
+            policy = t.policies.for_booking(b.policy, b.provider_id)
+            q = quote(policy, b.price or 0, datetime.fromisoformat(b.slot), t.clock.now())
+            meta.update(slot_label=t.slot(b.slot), price=b.price or 0, fee=q.fee, tier=q.tier,
+                        policy_note=q.describe(policy))
+            return Values("cancel", b.provider_id, b.slot, q.refund, b.id, None, meta)
         assert task.chosen is not None
+        meta.update(slot_label=t.slot(task.chosen.slot), previous_slot=b.slot, previous_slot_label=t.slot(b.slot))
         return Values("reschedule", b.provider_id, task.chosen.slot, b.price or 0, b.id, None, meta)
 
     def _values(self, t: Turn, a: dict | None) -> Values | None:
@@ -740,10 +763,20 @@ class Controller:
         if a is None or a["status"] != "pending":
             t.say("There's nothing waiting for your confirmation.")
             return
+        if a["id"] in t.created_approvals:  # shown in this reply; the user hasn't seen it yet
+            t.say(a["summary"] + " Confirm? (yes/no)")
+            return
         if t.approvals.is_expired(a):
             t.approvals.expire(a["id"])
             task.approval_id = None
             self._renew(t, a, "That approval expired.")
+            return
+        current = self._values(t, a)
+        if current is None or fingerprint(current) != a["fingerprint"]:
+            # e.g. the slot moved into a higher cancellation-fee tier since the approval was shown
+            t.approvals.void(a["id"], "values_changed")
+            task.approval_id = None
+            self._renew(t, a, "The amount changed since I asked, so that approval no longer applies.")
             return
         granted = t.approvals.grant(a["id"], t.message_id)  # only here: a user turn, approval displayed
         if granted is None:
@@ -817,6 +850,10 @@ class Controller:
                 t.say(f"{what}, so nothing was booked.")
                 self._search(t)
             return
+        if reason == "gate_mismatch" and a["action"] == "cancel" and task.target:
+            t.say("The cancellation fee changed since you approved it, so I didn't cancel.")
+            self._propose_cancel(t)
+            return
         if reason in ("hold_expired", "approval_expired"):
             t.go(Phase.HOLDING, reason)
             self._renew(t, a, "The hold expired before the booking went through, so nothing was booked.")
@@ -827,12 +864,15 @@ class Controller:
 
     def _success_text(self, t: Turn, out: Outcome, a: dict) -> str:
         when = t.slot(a["slot_start"].isoformat())
+        receipt = f" Receipt {out.receipt_no}." if out.receipt_no else ""
         if out.action == "book":
-            return f"Booked and verified: {a['provider_name']}, {when}. Booking id {out.booking_id}."
+            return f"Booked and verified: {a['provider_name']}, {when}. Booking id {out.booking_id}.{receipt}"
         if out.action == "cancel":
+            fee = self.deps.db.scalar("select fee from refunds where op_key = %s", (out.op_key,)) or 0
+            fee_text = f"Fee {format_inr(fee)}. " if fee else ""
             return (f"Cancelled and verified: {a['provider_name']}, {when}. "
-                    f"Refund {format_inr(a['amount'])}. Booking id {out.booking_id}.")
-        return f"Rescheduled and verified: {a['provider_name']} is now {when}. Booking id {out.booking_id}."
+                    f"{fee_text}Refund {format_inr(a['amount'])}. Booking id {out.booking_id}.{receipt}")
+        return f"Rescheduled and verified: {a['provider_name']} is now {when}. Booking id {out.booking_id}.{receipt}"
 
     # --- reschedule and cancel ---------------------------------------------------------------------------------
 
@@ -864,14 +904,26 @@ class Controller:
         return True
 
     def _booking_ref(self, b: dict) -> BookingRef:
-        copy = self.deps.db.one("select price, area from bookings where id = %s", (b["id"],))
+        copy = self.deps.db.one("select price, area, policy from bookings where id = %s", (b["id"],))
         return BookingRef(id=b["id"], provider_id=b["provider_id"], provider_name=b["provider_name"],
                           service=b["service"], slot=b["slot"], status=b["status"],
-                          price=copy["price"] if copy else None, area=copy["area"] if copy else None)
+                          price=copy["price"] if copy else None, area=copy["area"] if copy else None,
+                          policy=(copy["policy"] or None) if copy else None)
 
     def _advance_reschedule(self, t: Turn) -> None:
         task = t.task
         if not self._resolve_target(t):
+            return
+        b = task.target
+        policy = t.policies.for_booking(b.policy, b.provider_id)
+        if not can_reschedule(policy, datetime.fromisoformat(b.slot), t.clock.now()):
+            q = quote(policy, b.price or 0, datetime.fromisoformat(b.slot), t.clock.now())
+            extra = (f" You can cancel it and book again: cancelling now costs {format_inr(q.fee)}, "
+                     f"so the refund would be {format_inr(q.refund)}." if q.allowed else "")
+            t.say(f"Your {t.label(b.service)} booking is less than {policy.reschedule_free_hours:g} hours away, "
+                  f"so it can't be moved.{extra}")
+            t.go(Phase.ABORTED, "too_late_to_reschedule")
+            t.exit("completed")
             return
         if task.value("date") is None:
             task.awaiting = "required"
@@ -923,8 +975,15 @@ class Controller:
         b = t.task.target
         assert b is not None
         values = self._values_for(t, "cancel")
+        m = values.meta
+        if m["tier"] == "started":
+            t.say(f"Your {t.label(b.service)} booking has already started, so it can't be cancelled here.")
+            if t.s.phase != Phase.ABORTED:
+                t.go(Phase.ABORTED, "too_late_to_cancel")
+            t.exit("completed")
+            return
         summary = (f"Cancel {b.provider_name} ({t.label(b.service)}), {t.slot(b.slot)}. "
-                   f"Refund {format_inr(values.amount)}.")
+                   f"{m['policy_note']}. Refund {format_inr(values.amount)}.")
         self._create_approval(t, values, b.provider_name, summary, t.clock.now() + timedelta(minutes=APPROVAL_MINUTES))
         t.say(f"{summary} Confirm? (yes/no)")
 

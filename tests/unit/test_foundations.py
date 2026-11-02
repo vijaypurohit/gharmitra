@@ -10,7 +10,6 @@ from gharmitra.db import migrate
 from gharmitra.money import format_inr, rupees
 from gharmitra.trace import JsonlSink, MemorySink, PostgresSink, Redactor, Tracer, next_seq
 
-
 # --- config -----------------------------------------------------------------
 
 
@@ -137,6 +136,15 @@ def test_bug_2_redaction_keeps_fingerprints_and_ids():
     ids = ["H-9845012345", "op_98450123456", "BK-1042"]
     assert r({"fingerprint": fp, "ids": ids}) == {"fingerprint": fp, "ids": ids}
     assert r("call 9845012345 now") == "call [phone] now"
+
+
+def test_bug_3_redaction_keeps_token_counts():
+    """BUGS.md #3: any key containing "token" was redacted, so model usage counts never reached the trace."""
+    r = Redactor()
+    usage = {"input_tokens": 812, "output_tokens": 64, "max_tokens": 256}
+    assert r(usage) == usage
+    hidden = r({"token": "abc123", "access_token": "abc123", "refresh-token": "abc123", "api_key": "abc123"})
+    assert "abc123" not in str(hidden)
 
 
 def test_bug_1_bundled_postgres_path_with_spaces():

@@ -1,4 +1,4 @@
-"""Command line: `gharmitra chat`, `gharmitra web`, `gharmitra check-model`."""
+"""Command line: `gharmitra chat`, `gharmitra web`, `gharmitra report`, `gharmitra check-model`."""
 
 from __future__ import annotations
 
@@ -53,6 +53,21 @@ def _chat(args: argparse.Namespace) -> int:
         print()
 
 
+def _report(args: argparse.Namespace) -> int:
+    from gharmitra.config import load_settings
+    from gharmitra.db import Database, resolve_url
+    from gharmitra.report import as_text, build_report, load_events
+
+    settings = load_settings()
+    events = load_events(Database(resolve_url(settings.database_url, settings.data_dir), "agent"), args.session)
+    if not events:
+        print(f"No trace for session {args.session}.", file=sys.stderr)
+        return 1
+    r = build_report(events)
+    print(json.dumps(r, indent=2, default=str) if args.json else as_text(r))
+    return 0
+
+
 def _web(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -100,6 +115,11 @@ def main(argv: list[str] | None = None) -> None:
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8000)
     web.set_defaults(func=_web)
+
+    rep = sub.add_parser("report", help="totals for one session, from its trace")
+    rep.add_argument("session")
+    rep.add_argument("--json", action="store_true")
+    rep.set_defaults(func=_report)
 
     check = sub.add_parser("check-model", help="parse one message with the configured model")
     check.add_argument("text")

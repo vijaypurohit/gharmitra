@@ -26,3 +26,16 @@ Each entry: what broke, why, the fix, and the regression test that guards it.
   it only matches a number standing on its own.
 - **Regression test**:
   [`test_bug_2_redaction_keeps_fingerprints_and_ids`](../tests/unit/test_foundations.py)
+
+## 3. Trace redaction hid model token counts
+
+- **What broke**: the run report crashed with `unsupported operand type(s) for +: 'int' and 'str'`
+  when it summed token usage. Every `model_call` event carried `"input_tokens": "[redacted]"`, so
+  cost and token reporting had been silently empty since the tracer was written.
+- **Why**: the key-name rule redacted any key *containing* `token`, meant for `access_token` or
+  `Authorization` tokens. `input_tokens`, `output_tokens` and `max_tokens` matched too.
+- **Fix**: `token` now only matches as the last word of a key (`token`, `access_token`,
+  `refresh-token`); other secret key names are unchanged.
+- **Regression test**:
+  [`test_bug_3_redaction_keeps_token_counts`](../tests/unit/test_foundations.py), and
+  [`test_report_totals_match_trace`](../tests/unit/test_cancellation.py) reads the counts back.

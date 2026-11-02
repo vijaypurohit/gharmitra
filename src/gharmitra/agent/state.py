@@ -38,7 +38,7 @@ TRANSITIONS: dict[Phase, set[Phase]] = {
     P.PROPOSING: {P.HOLDING, P.AWAITING_APPROVAL, P.SEARCHING, P.COLLECTING, P.ABORTED},
     P.HOLDING: {P.AWAITING_APPROVAL, P.PROPOSING, P.SEARCHING, P.COLLECTING},
     P.AWAITING_APPROVAL: {P.EXECUTING, P.ABORTED, P.COLLECTING, P.HOLDING, P.PROPOSING, P.SEARCHING},
-    P.EXECUTING: {P.VERIFYING, P.PROPOSING, P.SEARCHING, P.HOLDING, P.FAILED},
+    P.EXECUTING: {P.VERIFYING, P.PROPOSING, P.SEARCHING, P.HOLDING, P.AWAITING_APPROVAL, P.ABORTED, P.FAILED},
     P.VERIFYING: {P.DONE, P.EXECUTING, P.FAILED},
     P.DONE: {P.COLLECTING},
     P.ABORTED: {P.COLLECTING},
@@ -93,6 +93,7 @@ class BookingRef(BaseModel):
     status: str
     price: int | None = None  # paise, from the agent's copy
     area: str | None = None
+    policy: dict[str, Any] | None = None  # cancellation policy snapshot taken at booking time
 
 
 class Task(BaseModel):
