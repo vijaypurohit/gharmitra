@@ -1,11 +1,11 @@
-"""Builds docs/eval_table.md from collected eval results (scenario · expected · actual · pass/fail · notes)."""
+"""Builds reports/eval_table.md from collected eval results (scenario · expected · actual · pass/fail · notes)."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-TABLE = Path(__file__).resolve().parents[2] / "docs" / "eval_table.md"
+TABLE = Path(__file__).resolve().parents[2] / "reports" / "eval_table.md"
 ICON = {"passed": "✅ pass", "failed": "❌ fail", "error": "❌ error", "skipped": "⏭ skipped"}
 
 

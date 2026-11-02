@@ -1,4 +1,4 @@
-"""Eval fixtures and the session-end hook that writes docs/eval_table.md (only when evals ran)."""
+"""Eval fixtures and the session-end hook that writes reports/eval_table.md (only when evals ran)."""
 
 from __future__ import annotations
 

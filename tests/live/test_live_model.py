@@ -4,7 +4,7 @@
 2. End-to-end: E1, E3, E4 and E11 with the live model reading real text against the seeded mock.
    Wording may differ; the global invariants must hold.
 
-Results are written to docs/live_model_report.md so runs can be compared across models.
+Results are written to reports/live_model_report.md so runs can be compared across models.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from gharmitra.llm.prompt import build_prompt
 from tests.evals.harness import check_invariants, make_world
 
 pytestmark = pytest.mark.live
-REPORT = Path(__file__).resolve().parents[2] / "docs" / "live_model_report.md"
+REPORT = Path(__file__).resolve().parents[2] / "reports" / "live_model_report.md"
 TODAY = date(2026, 11, 2)  # Monday, as in the evals
 
 # text, awaiting, expected fields (only the ones listed are checked)

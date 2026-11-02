@@ -44,6 +44,75 @@ End-to-end, invariants I1–I7 checked:
 | E4 injected review | 3 | 0 | ✅ |
 | E11 repeated yes | 7 | 0 | ✅ |
 
+<!-- run: openai/gemini-3.5-flash -->
+## `openai/gemini-3.5-flash` · 2026-11-03
+
+Intent accuracy: **16/25** · latency p50 9953 ms, p95 13151 ms · cost $0.0000
+
+| Utterance | Awaiting | Result |
+|---|---|---|
+| Find a plumber for my kitchen tap this week, mornings only, under ₹1,500 | — | ✅ |
+| plumber in HSR tomorrow morning | — | ✅ |
+| Move my AC servicing to Saturday | — | ❌ error: ModelError: rate_limited: 503 [{
+  "error": {
+    "code": 503,
+    "message": "This model is |
+| Book the same electrician as last time, but not before 10 a.m. | — | ✅ |
+| Cancel my cleaning booking | — | ✅ |
+| What do you remember about me? | — | ❌ error: ModelError: rate_limited: 503 [{
+  "error": {
+    "code": 503,
+    "message": "This model is |
+| Forget my area | — | ❌ error: ModelError: rate_limited: 429 [{
+  "error": {
+    "code": 429,
+    "message": "You exceeded  |
+| yes | confirm | ✅ |
+| haan, book it | confirm | ✅ |
+| no, don't | confirm | ✅ |
+| 2 | select | ✅ |
+| the second one | select | ✅ |
+| Koramangala | required | ✅ |
+| HSR mein | required | ✅ |
+| kal subah | required | ✅ |
+| AC service karwana hai | — | ✅ |
+| need a maid for deep cleaning on Friday in Indiranagar | — | ✅ |
+| electrician urgently, fan not working, Whitefield | — | ✅ |
+| make it Saturday instead | select | ✅ |
+| no preference | optional | ❌ error: ModelError: rate_limited: 429 [{
+  "error": {
+    "code": 429,
+    "message": "You exceeded  |
+| budget 800 max | optional | ❌ error: ModelError: rate_limited: 429 [{
+  "error": {
+    "code": 429,
+    "message": "You exceeded  |
+| after 4 pm | optional | ❌ error: ModelError: rate_limited: 429 [{
+  "error": {
+    "code": 429,
+    "message": "You exceeded  |
+| show my bookings | — | ❌ error: ModelError: rate_limited: 429 [{
+  "error": {
+    "code": 429,
+    "message": "You exceeded  |
+| I live in Jayanagar, remember that | — | ❌ error: ModelError: rate_limited: 429 [{
+  "error": {
+    "code": 429,
+    "message": "You exceeded  |
+| asdfgh | — | ❌ error: ModelError: rate_limited: 429 [{
+  "error": {
+    "code": 429,
+    "message": "You exceeded  |
+
+End-to-end, invariants I1–I7 checked:
+
+| Flow | Model calls | Fallbacks to rules | Result |
+|---|---|---|---|
+| E1 happy path | 5 | 5 | ✅ |
+| E3 correction | 4 | 4 | ✅ |
+| E4 injected review | 3 | 3 | ✅ |
+| E11 repeated yes | 7 | 7 | ✅ |
+
 <!-- run: rules/rules-v1 -->
 ## `rules/rules-v1` · 2026-11-03
 
