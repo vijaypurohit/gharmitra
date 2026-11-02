@@ -2,10 +2,15 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.log
 *.egg-info/
 dist/
 build/
 .env
+.env.*
+!.env.example
 *.db
 *.sqlite
 traces/*.jsonl
