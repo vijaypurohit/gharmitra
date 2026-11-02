@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from gharmitra.agent.cancellation import PolicyStore
 from gharmitra.agent.controller import Controller, Deps, Reply
 from gharmitra.agent.followup import provider_cancelled
 from gharmitra.catalogue import Catalogue, load_catalogue
 from gharmitra.clock import Clock, SystemClock
-from gharmitra.config import Limits, Settings, load_settings
+from gharmitra.config import Limits, Settings, SettingsStore, apply_overrides, load_settings
 from gharmitra.db import Database, jsonb, migrate, resolve_url
 from gharmitra.llm.base import ModelClient
 from gharmitra.llm.factory import make_model
@@ -47,6 +48,16 @@ class World:
         """A new controller over the same database: what a process restart looks like."""
         self.controller = Controller(self.controller.deps)
         return self.controller
+
+
+def prune_traces(db: Database, clock: Clock, days: int) -> int:
+    """Drop trace events of sessions idle longer than the retention period (0 keeps everything)."""
+    if days <= 0:
+        return 0
+    cutoff = clock.now() - timedelta(days=days)
+    return db.scalar(
+        "with old as (delete from trace_events where session_id in"
+        " (select id from sessions where updated_at < %s) returning 1) select count(*) from old", (cutoff,))
 
 
 def seed_agent(db: Database, clock: Clock, catalogue: Catalogue) -> None:
@@ -87,7 +98,9 @@ def build(
     agent_db, mock_db = Database(url, agent_schema), Database(url, mock_schema)
     migrate(agent_db, "agent")
     migrate(mock_db, "mock")
+    settings = apply_overrides(settings, SettingsStore(agent_db).get())  # defaults < env < Settings page
     clock = clock or SystemClock()
+    prune_traces(agent_db, clock, settings.trace_retention_days)
     catalogue = load_catalogue(settings.city)
     scenario = scenario or get_scenario(settings.scenario, settings.seed)
     MockProviderAPI(mock_db, clock, scenario, sd.DEMO_USER, catalogue).seed()

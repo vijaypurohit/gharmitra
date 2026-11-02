@@ -5,50 +5,136 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GharMitra</title>
   <link rel="icon" href="/static/logo.svg">
+  <link rel="preload" href="/static/fonts/Inter-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
+  <script>document.documentElement.dataset.theme = localStorage.getItem("gm-theme") || "auto";</script>
 </head>
 <body>
   <header>
     <div class="brand"><img src="/static/logo.svg" alt="" width="28" height="28"><span>GharMitra</span></div>
+    <nav class="pages" aria-label="Pages">
+      <a href="#chat" data-page="chat">Chat</a>
+      <a href="#bookings" data-page="bookings">Bookings</a>
+      <a href="#memory" data-page="memory">Memory</a>
+      <a href="#settings" data-page="settings">Settings</a>
+    </nav>
     <div class="controls">
       <label>User <select id="user"></select></label>
-      <label>Scenario <select id="scenario"></select></label>
-      <button id="reset" class="ghost" title="Wipe the demo world and reseed it with this scenario">Reset world</button>
-      <button id="cancel-demo" class="ghost" title="Simulate a provider cancelling one of this user's bookings">Provider cancels…</button>
-      <button id="new" class="ghost">New chat</button>
-      <span id="model" class="pill"></span>
+      <span id="model" class="pill" title="Model adapter"></span>
+      <button id="theme" class="ghost icon" title="Theme: auto" aria-label="Switch theme">◐</button>
     </div>
   </header>
 
-  <nav class="tabs" aria-label="Panels">
-    <button data-tab="chat" class="active">Chat</button>
-    <button data-tab="trace">Trace</button>
-  </nav>
-
-  <main>
-    <section id="chat" class="panel active" aria-label="Chat">
-      <div id="messages" aria-live="polite"></div>
-      <form id="composer" autocomplete="off">
-        <input id="text" placeholder="e.g. Find a plumber for my kitchen tap this week, mornings only, under ₹1,500" autofocus>
-        <button type="submit">Send</button>
-      </form>
-      <div class="hints" id="hints"></div>
-    </section>
-
-    <section id="trace" class="panel" aria-label="Trace">
-      <div class="trace-head">
-        <strong>Trace</strong> <span id="session" class="mono muted"></span>
-        <div class="filters" role="group" aria-label="Filter">
-          <button data-filter="all" class="active">all</button>
-          <button data-filter="tools">tools</button>
-          <button data-filter="approvals">approvals</button>
-          <button data-filter="model">model</button>
+  <!-- Chat -->
+  <section id="page-chat" class="page">
+    <div class="toolbar">
+      <label>Scenario <select id="scenario"></select></label>
+      <button id="reset" class="ghost" title="Wipe bookings, memory and chats and reseed with this scenario">Reset world</button>
+      <button id="cancel-demo" class="ghost" title="Simulate a provider cancelling one of this user's bookings">Provider cancels…</button>
+      <span class="spacer"></span>
+      <button id="report" class="ghost" title="Totals for this session, from its trace">Run report</button>
+      <button id="new" class="ghost">New chat</button>
+    </div>
+    <nav class="tabs" aria-label="Panels">
+      <button data-tab="chat" class="active">Chat</button>
+      <button data-tab="trace">Trace</button>
+    </nav>
+    <main>
+      <section id="chat" class="panel active" aria-label="Chat">
+        <div id="messages" aria-live="polite"></div>
+        <form id="composer" autocomplete="off">
+          <input id="text" aria-label="Message" placeholder="e.g. Find a plumber for my kitchen tap this week, mornings only, under ₹1,500" autofocus>
+          <button type="submit">Send</button>
+        </form>
+        <div class="hints" id="hints"></div>
+      </section>
+      <section id="trace" class="panel" aria-label="Trace">
+        <div class="trace-head">
+          <strong>Trace</strong> <span id="session" class="mono muted"></span>
+          <div class="filters" role="group" aria-label="Filter">
+            <button data-filter="all" class="active">all</button>
+            <button data-filter="tools">tools</button>
+            <button data-filter="approvals">approvals</button>
+            <button data-filter="model">model</button>
+          </div>
         </div>
-      </div>
-      <ol id="events" class="mono"></ol>
-    </section>
-  </main>
+        <ol id="events" class="mono"></ol>
+      </section>
+    </main>
+  </section>
 
+  <!-- Bookings -->
+  <section id="page-bookings" class="page doc" hidden>
+    <div class="doc-head">
+      <h1>Bookings</h1>
+      <p class="muted">Cancel and reschedule open a chat, so they still go through approval.</p>
+    </div>
+    <div class="table-wrap"><table id="bookings-table">
+      <thead><tr><th>Booking</th><th>Service</th><th>Provider</th><th>Slot</th><th class="num">Price</th>
+        <th>Status</th><th class="num">Fee</th><th class="num">Refund</th><th>Receipts</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p id="bookings-empty" class="empty" hidden>No bookings yet.</p>
+  </section>
+
+  <!-- Memory -->
+  <section id="page-memory" class="page doc" hidden>
+    <div class="doc-head">
+      <h1>Memory</h1>
+      <p class="muted"><b>Stated</b>: you told me, used directly. <b>Inferred</b>: guessed from your history,
+        used only after you say yes in chat.</p>
+    </div>
+    <ul id="facts" class="facts"></ul>
+    <p id="facts-empty" class="empty" hidden>Nothing saved. Say "remember I live in Koramangala" in chat.</p>
+  </section>
+
+  <!-- Settings -->
+  <section id="page-settings" class="page doc" hidden>
+    <div class="doc-head">
+      <h1>Settings</h1>
+      <p class="muted">Order: code defaults &lt; environment (.env) &lt; values saved here. Clear a field to go back.
+        API keys come from the environment only and are never shown.</p>
+    </div>
+    <form id="settings-form" class="settings">
+      <fieldset>
+        <legend>Model</legend>
+        <div class="grid" id="model-fields"></div>
+        <div class="row" id="secrets"></div>
+        <div class="row test-model">
+          <input id="test-text" aria-label="Test message" value="plumber in HSR tomorrow morning">
+          <button type="button" id="test-model" class="ghost">Test model</button>
+        </div>
+        <pre id="test-result" class="mono result" hidden></pre>
+      </fieldset>
+      <fieldset>
+        <legend>Budgets</legend>
+        <div class="grid" id="limit-fields"></div>
+      </fieldset>
+      <fieldset>
+        <legend>Traces</legend>
+        <div class="grid" id="trace-fields"></div>
+      </fieldset>
+      <div class="actions"><button type="submit">Save settings</button><span id="settings-status" class="muted"></span></div>
+    </form>
+    <form id="policy-form" class="settings">
+      <fieldset>
+        <legend>Cancellation policy</legend>
+        <p class="muted small">Applies to new bookings; each booking keeps the policy it was made under.</p>
+        <div class="grid" id="policy-fields"></div>
+        <p class="muted small" id="overrides"></p>
+      </fieldset>
+      <div class="actions"><button type="submit">Save policy</button><span id="policy-status" class="muted"></span></div>
+    </form>
+    <section class="settings">
+      <fieldset>
+        <legend>Locale and demo</legend>
+        <dl id="locale" class="kv"></dl>
+        <p class="muted small">Locale and seed come from the environment. Change the scenario with Reset world on the Chat page.</p>
+      </fieldset>
+    </section>
+  </section>
+
+  <dialog id="dialog"><form method="dialog"><pre id="dialog-body" class="mono"></pre><button>Close</button></form></dialog>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

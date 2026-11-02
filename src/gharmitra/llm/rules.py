@@ -91,6 +91,8 @@ class RuleModel:
         if goal in ("reschedule", "cancel"):
             service = entities.pop("service", None)
             target = {"service": service} if service else None
+            if m := re.search(r"\bbk-?(\d+)\b", t):
+                target = {**(target or {}), "booking_id": f"BK-{m.group(1)}"}
             if goal == "cancel":
                 entities.pop("area", None)
         if goal:

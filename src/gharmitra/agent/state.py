@@ -107,6 +107,7 @@ class Task(BaseModel):
     hold: Hold | None = None
     approval_id: str | None = None
     target: BookingRef | None = None
+    target_id: str | None = None  # a booking id the user named ("cancel BK-905")
     candidates: list[BookingRef] = Field(default_factory=list)
     awaiting: str | None = None  # required | optional | select | confirm | pick_booking | use_inferred
     pending_fact: dict[str, str] | None = None  # inferred fact waiting for a yes / no

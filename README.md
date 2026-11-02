@@ -121,12 +121,13 @@ Settings.
 | `GET /api/sessions/{id}/events` | Live trace (Server-Sent Events) |
 | `POST /api/demo/provider-cancels` | `{booking_id}`: the provider cancels; returns the follow-up session and its messages |
 | `GET /api/sessions/{id}/report` | Run report |
-| `GET /api/bookings` | Bookings with status, fees and refunds |
-| `GET /api/receipts/{receipt_no}` | Receipt (JSON, or HTML with `Accept: text/html`) |
-| `GET /api/policy` | Current cancellation policy |
-| `GET` · `PUT` · `DELETE /api/memory[/{key}]` | View, correct, forget |
-| `GET` · `PUT /api/settings` | Read / update settings |
-| `POST /api/settings/test-model` | Parse a sample message → intent, latency, cost |
+| `GET /api/bookings` | Bookings with status, fees, refunds, credit and receipt numbers |
+| `GET /api/receipts/{receipt_no}` | Receipt: JSON, HTML (`Accept: text/html`) or text (`Accept: text/plain`) |
+| `GET` · `PUT /api/policy` | Cancellation policy: `{platform: {...}, overrides: {provider_id: {...} or null}}` |
+| `GET` · `PUT` · `DELETE /api/memory[/{key}]` | View, correct, forget (`?user_id=`) |
+| `GET` · `PUT /api/settings` | Read / update settings: `{changes: {key: value or null}}`; null goes back to env or default |
+| `POST /api/settings/test-model` | Parse a sample message → intent, latency, tokens, cost |
+| `POST /api/reset` | `{scenario}`: wipe bookings, memory and chats and reseed; settings and policy stay |
 
 </details>
 
@@ -145,8 +146,11 @@ hold secrets; Settings can override non-secret values. Order: code defaults < en
 | `TRACE_SINKS` | `postgres,jsonl` | Where traces go |
 | `CITY` · `CURRENCY` · `TIMEZONE` | `bengaluru` · `INR` · `Asia/Kolkata` | Locale |
 | `SEED` · `SCENARIO` | `42` · `default` | Mock randomness and forced failures (timeout after success, injected review, provider cancels) |
+| `TRACE_RETENTION_DAYS` | `30` | Trace events of sessions idle longer than this are deleted at startup (`0` keeps all) |
 
-Budgets, cancellation policy and trace retention are edited in Settings. City data lives in
+Model adapter, endpoint and name, timeouts, budgets, cancellation policy and trace retention can be
+edited in Settings; each field shows whether its value comes from the default, the environment or
+Settings. API keys and `DATABASE_URL` are env-only and never stored or returned. City data lives in
 `src/gharmitra/cities/`; adding a city is one file.
 
 ## Tests

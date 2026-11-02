@@ -331,6 +331,8 @@ class Controller:
             self._new_task(t, i.goal or "book")
         if i.target and i.target.service and t.task.goal in ("reschedule", "cancel"):
             t.task.fields["service"] = FieldValue(value=i.target.service)
+        if i.target and i.target.booking_id and t.task.goal in ("reschedule", "cancel"):
+            t.task.target_id = i.target.booking_id.upper()
         self._merge(t, i.entities, i.remember)
         self._advance(t)
 
@@ -885,11 +887,13 @@ class Controller:
         now = t.clock.now()
         upcoming = [b for b in t.tools.list_bookings(user_id=t.user)
                     if b["status"] == "booked" and datetime.fromisoformat(b["slot"]) > now
-                    and (service is None or b["service"] == service)]
+                    and (service is None or b["service"] == service)
+                    and (task.target_id is None or b["id"] == task.target_id)]
         refs = [self._booking_ref(b) for b in upcoming]
         if not refs:
             what = f"{t.label(service)} " if service else ""
-            t.say(f"I couldn't find an upcoming {what}booking to change.")
+            named = f" with id {task.target_id}" if task.target_id else ""
+            t.say(f"I couldn't find an upcoming {what}booking{named} to change.")
             t.go(Phase.ABORTED, "no_target")
             t.exit("completed")
             return False

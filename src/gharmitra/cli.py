@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 
 from gharmitra.mock_api import seed_data as sd
 from gharmitra.mock_api.scenarios import SCENARIOS
@@ -76,29 +75,12 @@ def _web(args: argparse.Namespace) -> int:
 
 
 def _check_model(args: argparse.Namespace) -> int:
-    from datetime import date
-
-    from gharmitra.catalogue import load_catalogue
     from gharmitra.config import load_settings
-    from gharmitra.llm.base import Intent
-    from gharmitra.llm.factory import make_model
-    from gharmitra.llm.prompt import build_prompt
+    from gharmitra.llm.factory import probe
 
-    settings = load_settings()
-    model = make_model(settings)
-    prompt = build_prompt(args.text, today=date.today(), catalogue=load_catalogue(settings.city),
-                          phase="COLLECTING", known_fields=[], awaiting=None)
-    started = time.perf_counter()
-    result = model.complete(prompt)
-    latency = (time.perf_counter() - started) * 1000
-    intent = Intent.model_validate_json(result.text)
-    print(json.dumps({
-        "adapter": model.adapter, "model": model.model, "latency_ms": round(latency, 1),
-        "input_tokens": result.usage.input_tokens, "output_tokens": result.usage.output_tokens,
-        "cost_usd": result.usage.cost_usd,
-        "intent": intent.model_dump(mode="json", by_alias=True, exclude_defaults=True),
-    }, indent=2, ensure_ascii=False))
-    return 0
+    result = probe(load_settings(), args.text)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0 if result["ok"] else 1
 
 
 def main(argv: list[str] | None = None) -> None:

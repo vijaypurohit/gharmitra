@@ -185,3 +185,10 @@ def test_scripted_model_records_prompts_without_tool_text():
     run(parser, budget, "x")
     p = model.prompts[0]
     assert "2026-11-02" in p.system and "HSR Layout" in p.system and p.user == "x"
+
+
+def test_rules_parse_booking_id_target():
+    from gharmitra.llm.rules import RuleModel
+
+    i = RuleModel().parse("Cancel booking BK-905", {"today": "2026-11-02"})
+    assert i.goal == "cancel" and i.target.booking_id == "BK-905"
