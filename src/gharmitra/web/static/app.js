@@ -102,6 +102,9 @@ function summarise(e) {
     case "exit": return p.reason;
     case "budget": return `model ${p.model_calls} · tools ${p.tool_calls} · ${p.elapsed_s}s`;
     case "memory": return `${p.op} ${p.key} → ${p.status}`;
+    case "followup": return `${p.event} ${p.booking_id}`;
+    case "followup_ignored": return `${p.booking_id} still ${p.provider_status} at the provider`;
+    case "refund": return `${p.booking_id} ₹${(p.amount / 100).toLocaleString("en-IN")} + credit ₹${(p.credit / 100).toLocaleString("en-IN")} (${p.reason})`;
     default: return JSON.stringify(p);
   }
 }
@@ -154,6 +157,30 @@ async function newChat() {
   localStorage.setItem("gm-session", JSON.stringify({ id: session_id, user: state.user }));
 }
 
+async function providerCancels() {
+  const now = new Date();
+  const upcoming = (await api(`/api/bookings?user_id=${state.user}`))
+    .filter((b) => b.status === "booked" && new Date(b.slot_start) > now);
+  if (!upcoming.length) {
+    addMessage("notice", "This user has no upcoming bookings to cancel.");
+    return;
+  }
+  const list = upcoming.map((b) => `${b.id}  ${b.provider_name}, ${new Date(b.slot_start).toLocaleString()}`).join("\n");
+  const id = prompt(`Which booking does the provider cancel?\n\n${list}`, upcoming[0].id);
+  if (!id) return;
+  try {
+    const r = await api("/api/demo/provider-cancels", { booking_id: id.trim() });
+    state.sessionId = r.session_id;
+    $("#messages").replaceChildren();
+    addMessage("notice", `Provider cancelled ${id.trim()}. Follow-up session ${r.session_id}.`);
+    watch(r.session_id);
+    localStorage.setItem("gm-session", JSON.stringify({ id: r.session_id, user: state.user }));
+    r.messages.forEach((m) => addMessage("agent", m));
+  } catch (e) {
+    addMessage("notice", `Request failed: ${e.message}`);
+  }
+}
+
 async function resume(saved) {
   try {
     const msgs = await api(`/api/sessions/${saved.id}/messages`);
@@ -192,6 +219,7 @@ async function init() {
     send(text);
   };
   $("#new").onclick = newChat;
+  $("#cancel-demo").onclick = providerCancels;
   $("#user").onchange = () => { state.user = $("#user").value; newChat(); };
   $("#reset").onclick = async () => {
     const scenario = $("#scenario").value;

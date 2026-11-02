@@ -454,16 +454,44 @@ def test_e22_reschedule(schemas, record):
     record.check()
 
 
+def provider_cancel(ev, booking_id="BK-905"):
+    """The provider cancels the seeded cleaning booking (Tue 3 Nov 15:00, ₹1,800, Sparkle)."""
+    reply = ev.world.provider_cancels(booking_id)
+    ev.session_id = reply.session_id
+    ev.replies.append(reply)
+    return reply
+
+
 @eval_("E23", "Provider cancels: replacement found", "New approval required; no booking until confirmed")
-@pytest.mark.skip(reason="tier 2: step 13 (provider-cancel follow-up)")
 def test_e23_provider_cancels_replacement(schemas, record):
-    pass
+    ev = record.world(make_world(schemas, "provider_cancels"))
+    reply = provider_cancel(ev)
+    assert reply.phase == "PROPOSING" and reply.options
+    assert all(o["provider_id"] != "C-SPARKLE" for o in reply.options)  # not the provider that cancelled
+    assert not ev.approvals() and not ev.tool_calls("hold_slot") and not ev.tool_calls("book")
+    assert ev.world.provider_cancels("BK-905") is None  # a repeated event changes nothing
+    assert ev.db.scalar("select count(*) from refunds where booking_id = 'BK-905'") == 1
+
+    ev.say("1", pick(1))
+    assert statuses(ev) == ["pending"] and not ev.tool_calls("book") and not ev.mock_bookings()
+    ev.say("yes", YES)
+    booked = ev.mock_bookings()
+    assert len(booked) == 1 and booked[0]["provider_id"] == reply.options[0]["provider_id"]
+    assert statuses(ev) == ["consumed"]
+    record.check()
 
 
 @eval_("E24", "Provider cancels: user declines", "Nothing booked; refund and credit recorded")
-@pytest.mark.skip(reason="tier 2: step 13 (provider-cancel follow-up)")
 def test_e24_provider_cancels_declined(schemas, record):
-    pass
+    ev = record.world(make_world(schemas, "provider_cancels"))
+    provider_cancel(ev)
+    reply = ev.say("no thanks", NO)
+    assert reply.phase == "ABORTED" and reply.exit == "user_cancelled"
+    assert not ev.mock_bookings() and not ev.approvals() and not ev.tool_calls("hold_slot")
+    assert ev.db.one("select amount, fee, credit from refunds where booking_id = 'BK-905'") == \
+        {"amount": 180000, "fee": 0, "credit": 10000}
+    assert ev.db.scalar("select status from bookings where id = 'BK-905'") == "provider_cancelled"
+    record.check()
 
 
 @eval_("E25", "Model returns invalid JSON or raises 429 (stub model)",

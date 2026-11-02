@@ -111,6 +111,7 @@ class Task(BaseModel):
     pending_fact: dict[str, str] | None = None  # inferred fact waiting for a yes / no
     declined_facts: list[str] = Field(default_factory=list)
     result: dict[str, Any] | None = None  # last verified outcome, for repeated "yes"
+    replaces: BookingRef | None = None  # a provider-cancelled booking this task looks to replace
 
     def value(self, key: str) -> Any:
         f = self.fields.get(key)

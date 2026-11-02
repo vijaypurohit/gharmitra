@@ -151,9 +151,10 @@ class Controller:
             raise KeyError(f"unknown session {session_id}")
         tracer = self.tracer(session_id)
         t = Turn(self, session, tracer)
-        try:
-            t.message_id = self.sessions.add_message(session_id, "user", text)
-            tracer.emit("user_msg", text=text, approval_id=approval_id)
+        t.message_id = self.sessions.add_message(session_id, "user", text)
+        tracer.emit("user_msg", text=text, approval_id=approval_id)
+
+        def run() -> None:
             session.turns += 1
             t.budget.check_turns(session.turns)
             self._reconcile(t)
@@ -167,6 +168,24 @@ class Controller:
                         confidence=i.confidence, usable=parsed.usable, problems=parsed.problems,
                         adapter=parsed.adapter, fallback=parsed.fallback)
             self._apply(t, parsed, approval_id)
+
+        return self._run_turn(t, run)
+
+    def system_turn(self, session_id: str, event: str, step: Callable[[Turn], None], **payload: Any) -> Reply:
+        """A turn started by an outside event (a provider cancelling), not by a user message.
+
+        It can search and show options but never grant an approval: grant() needs a user message.
+        """
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"unknown session {session_id}")
+        t = Turn(self, session, self.tracer(session_id))
+        t.tracer.emit("followup", event=event, **payload)
+        return self._run_turn(t, lambda: step(t))
+
+    def _run_turn(self, t: Turn, run: Callable[[], None]) -> Reply:
+        try:
+            run()
         except LimitExceeded as exc:
             t.say(self._limit_message(t, exc.reason))
             t.exit(exc.reason)
@@ -174,12 +193,13 @@ class Controller:
             log.exception("turn failed")
             t.say("Sorry, something went wrong on my side, so I stopped. " + self._known_state(t))
             t.exit("unknown_error")
-        tracer.emit("budget", **t.budget.snapshot())
+        session = t.s
+        t.tracer.emit("budget", **t.budget.snapshot())
         self.sessions.save(session)
         for line in t.out:
-            self.sessions.add_message(session_id, "agent", line)
-            tracer.emit("agent_msg", text=line)
-        return Reply(session_id, t.out, session.phase.value, t.card,
+            self.sessions.add_message(session.id, "agent", line)
+            t.tracer.emit("agent_msg", text=line)
+        return Reply(session.id, t.out, session.phase.value, t.card,
                      [o.model_dump() for o in t.task.options] if session.phase == Phase.PROPOSING else [],
                      t.exit_reason)
 
@@ -385,7 +405,8 @@ class Controller:
         if task.goal and t.s.phase not in TERMINAL:
             t.approvals.void(task.approval_id, "user_declined")
             t.go(Phase.ABORTED, "user_declined")
-            t.say("OK, I've stopped. Nothing was booked or changed.")
+            t.say("OK, I won't book a replacement. Your refund and credit stand." if task.replaces
+                  else "OK, I've stopped. Nothing was booked or changed.")
             t.exit("user_cancelled")
             return
         t.say("OK.")
@@ -584,16 +605,22 @@ class Controller:
         window = task.value("time") or {}
         budget = task.value("budget_max")
         pref = task.value("provider") if isinstance(task.value("provider"), dict) else None
+        near = None
+        if task.replaces:  # a replacement: each provider's slot closest to the cancelled one
+            original = datetime.fromisoformat(task.replaces.slot)
+            near = lambda s: abs(datetime.fromisoformat(s) - original)  # noqa: E731
         candidates = []
         for p in results:
             if pref and pref.get("strict") and p["id"] != pref.get("id"):
                 continue
+            if task.replaces and p["id"] == task.replaces.provider_id:
+                continue  # the provider that cancelled
             price = rupees(p["price"])
             if budget is not None and price > budget:
                 continue
             slots = [s for s in p["free_slots"] if self._in_window(t, s, window) and f"{p['id']}|{s}" not in task.excluded]
             if slots:
-                candidates.append((p, price, slots[0]))
+                candidates.append((p, price, min(slots, key=near) if near else slots[0]))
         candidates.sort(key=lambda c: (not (pref and c[0]["id"] == pref.get("id")), -c[0]["rating"], c[1]))
         options = []
         for p, price, slot in candidates[:MAX_OPTIONS]:
@@ -606,7 +633,9 @@ class Controller:
             task.awaiting = "required"
             t.say("I couldn't find anything that matches. Try another day, time or budget.")
             return
-        self._show_options(t, "Here are the best matches:")
+        intro = "Possible replacements. Nothing is booked until you pick one and confirm:" if task.replaces \
+            else "Here are the best matches:"
+        self._show_options(t, intro)
 
     def _in_window(self, t: Turn, slot: str, window: dict) -> bool:
         local = datetime.fromisoformat(slot).astimezone(t.clock.tz).strftime("%H:%M")
@@ -664,7 +693,8 @@ class Controller:
         task.hold = Hold(hold_id=h["hold_id"], provider_id=o.provider_id, provider_name=o.provider_name, slot=o.slot,
                          quoted_price=quoted, expires_at=h["expires_at"])
         price_note = "" if quoted == o.price else f" (listed at {format_inr(o.price)})"
-        summary = f"Book {o.provider_name}, {t.slot(o.slot)}, {format_inr(quoted)} (quoted)."
+        replacing = f", replacing {task.replaces.id}" if task.replaces else ""
+        summary = f"Book {o.provider_name}, {t.slot(o.slot)}, {format_inr(quoted)} (quoted){replacing}."
         values = self._values_for(t, "book")
         self._create_approval(t, values, o.provider_name, summary, datetime.fromisoformat(h["expires_at"]))
         t.say(f"{note + ' ' if note else ''}Holding the slot. The provider quoted {format_inr(quoted)}{price_note}.\n"

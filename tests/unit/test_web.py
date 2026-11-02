@@ -52,3 +52,14 @@ def test_unknown_session_and_reset(schemas):
     assert c.post("/api/reset", json={"scenario": "nope"}).status_code == 400
     assert c.post("/api/reset", json={"scenario": "injected_review"}).json() == {"scenario": "injected_review"}
     assert c.get("/api/info").json()["scenario"] == "injected_review"
+
+
+def test_provider_cancels_demo_hook(schemas):
+    c, world = client(schemas)
+    assert c.post("/api/demo/provider-cancels", json={"booking_id": "BK-NOPE"}).status_code == 404
+    r = c.post("/api/demo/provider-cancels", json={"booking_id": "BK-905"}).json()
+    assert r["phase"] == "PROPOSING" and "cancelled" in r["messages"][0]
+    assert c.post("/api/demo/provider-cancels", json={"booking_id": "BK-905"}).status_code == 404
+    assert chat(c, r["session_id"], "1")["approval"]  # the replacement goes through the normal approval
+    statuses = {b["id"]: b["status"] for b in c.get("/api/bookings").json()}
+    assert statuses["BK-905"] == "provider_cancelled"

@@ -8,9 +8,9 @@ double-books, never acts without your approval, and ignores instructions hidden 
 
 Everything runs locally: no real providers, no payments, and no LLM key needed.
 
-> Status: the agent, mock API, CLI, web chat with live trace and 30 eval scenarios are built
-> (tier 1). Not yet built: cancellation fees and receipts, provider-cancel follow-up, the Bookings,
-> Memory and Settings pages, and the LLM adapters (the offline `rules` parser is used).
+> Status: the agent, mock API, CLI, web chat with live trace, provider-cancel follow-up and 32 eval
+> scenarios are built. Not yet built: cancellation fees and receipts, the Bookings, Memory and
+> Settings pages, and the LLM adapters (the offline `rules` parser is used).
 
 ## Quick start
 
@@ -25,6 +25,10 @@ uv run gharmitra web       # chat + live trace at http://localhost:8000
 Terminal instead: `uv run gharmitra chat`, and `tail -f traces/latest.jsonl` in a second terminal
 for the trace. `--scenario timeout_after_success` (or `injected_review`, `slot_taken`, `happy`) picks a
 mock world; `--user u-new` starts without booking history. In the web app, **Reset world** does the same.
+
+Provider cancels: type `/provider-cancels BK-905` in the CLI, or use **Provider cancels…** in the web
+app. The agent checks the cancellation with the provider, records a full refund plus a ₹100 credit,
+and offers replacements in a new session. It never rebooks without your pick and approval.
 
 ## Example
 
@@ -115,6 +119,7 @@ Settings.
 | `GET /api/sessions/{id}/messages` | Chat history |
 | `POST /api/chat` | `{session_id, text, approval_id?}` → agent messages, approval card, phase |
 | `GET /api/sessions/{id}/events` | Live trace (Server-Sent Events) |
+| `POST /api/demo/provider-cancels` | `{booking_id}`: the provider cancels; returns the follow-up session and its messages |
 | `GET /api/sessions/{id}/report` | Run report |
 | `GET /api/bookings` | Bookings with status, fees and refunds |
 | `GET /api/receipts/{receipt_no}` | Receipt (JSON, or HTML with `Accept: text/html`) |

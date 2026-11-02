@@ -204,8 +204,12 @@ Platform default, overridable per provider and snapshotted on each booking: ≥ 
 free; 3–24 h ₹100; < 3 h 50%; provider cancels → full refund + ₹100 credit (mirrors the late fee, per
 the Consumer Protection (E-Commerce) Rules, 2020). The refund is in the cancel fingerprint, so
 crossing a tier voids the approval. Rescheduling ≥ 3 h before is free; later it's cancel-and-rebook.
-The `provider_cancels(booking_id)` demo hook triggers a replacement search and a new approval; the
-agent never rebooks on its own.
+The `provider_cancels(booking_id)` demo hook triggers the follow-up (`agent/followup.py`) as a turn
+with no user message. The agent first checks with `list_bookings` that the provider really cancelled
+(an unconfirmed notice changes nothing), records the refund and credit once, then searches the same
+service and area over the original day and the next two. It leaves out the provider that cancelled and
+prefers slots near the original time. It stops at the options, because a turn without a user message
+cannot grant an approval, so the agent never rebooks on its own.
 
 ## 11. Data model
 

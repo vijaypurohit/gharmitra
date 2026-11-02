@@ -26,7 +26,8 @@ def _chat(args: argparse.Namespace) -> int:
     session_id = session_id or controller.start_session(args.user)
     print(f"GharMitra · session {session_id} · user {args.user} · model {settings.model_adapter}"
           f" · scenario {world.scenario.name}")
-    print(f"Trace: traces/{session_id}.jsonl (also traces/latest.jsonl). Ctrl-D to quit.\n")
+    print(f"Trace: traces/{session_id}.jsonl (also traces/latest.jsonl). Ctrl-D to quit.")
+    print("Demo: /provider-cancels BK-905 simulates a provider cancelling that booking.\n")
     while True:
         try:
             text = input("you> ").strip()
@@ -35,7 +36,18 @@ def _chat(args: argparse.Namespace) -> int:
             return 0
         if not text:
             continue
-        reply = controller.handle(session_id, text)
+        if text.startswith("/provider-cancels"):
+            booking_id = text.split(maxsplit=1)[1].strip() if " " in text else ""
+            followup = world.provider_cancels(booking_id)
+            if followup is None:
+                print(f"     No active booking {booking_id or '(give an id)'} to cancel.\n")
+                continue
+            session_id = followup.session_id  # the follow-up opens its own session
+            controller = world.controller
+            print(f"     [provider cancelled {booking_id}; follow-up session {session_id}]")
+            reply = followup
+        else:
+            reply = controller.handle(session_id, text)
         for n, line in enumerate(reply.text.splitlines()):
             print(("gm > " if n == 0 else "     ") + line)
         print()

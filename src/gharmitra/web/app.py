@@ -33,7 +33,7 @@ SCENARIO_NOTES = {
     "timeout_after_success": "First book times out but actually booked",
     "injected_review": "Injection in reviews, a provider name and attributes",
     "slot_taken": "First book returns slot_taken",
-    "provider_cancels": "Bookings succeed; provider-cancel hook available",
+    "provider_cancels": "Bookings succeed; use \"Provider cancels\" to trigger a follow-up",
 }
 
 
@@ -45,6 +45,10 @@ class ChatIn(BaseModel):
 
 class SessionIn(BaseModel):
     user_id: str = sd.DEMO_USER
+
+
+class ProviderCancelIn(BaseModel):
+    booking_id: str
 
 
 class ResetIn(BaseModel):
@@ -144,6 +148,16 @@ def create_app(settings: Settings | None = None, world: World | None = None) -> 
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @api.post("/api/demo/provider-cancels")
+    def provider_cancels(body: ProviderCancelIn) -> dict:
+        """Demo hook: the provider cancels a booking; the agent follows up in a new session."""
+        with state.lock:
+            reply = state.world.provider_cancels(body.booking_id)
+        if reply is None:
+            raise HTTPException(404, f"no active booking {body.booking_id}")
+        return {"session_id": reply.session_id, "messages": reply.messages, "phase": reply.phase,
+                "approval": reply.approval, "exit": reply.exit}
 
     @api.get("/api/bookings")
     def bookings(user_id: str = sd.DEMO_USER) -> list[dict]:

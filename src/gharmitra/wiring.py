@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from gharmitra.agent.controller import Controller, Deps
+from gharmitra.agent.controller import Controller, Deps, Reply
+from gharmitra.agent.followup import provider_cancelled
 from gharmitra.catalogue import Catalogue, load_catalogue
 from gharmitra.clock import Clock, SystemClock
 from gharmitra.config import Limits, Settings, load_settings
@@ -32,6 +33,14 @@ class World:
 
     def api(self, user_id: str) -> MockProviderAPI:
         return MockProviderAPI(self.mock_db, self.clock, self.scenario, user_id, self.catalogue)
+
+    def provider_cancels(self, booking_id: str) -> Reply | None:
+        """Demo hook: the provider cancels, then the agent gets the event and follows up."""
+        owner = self.mock_db.scalar("select user_id from bookings where id = %s", (booking_id,))
+        if owner is None:
+            return None
+        self.api(owner).provider_cancels(booking_id)
+        return provider_cancelled(self.controller, booking_id)
 
     def restart(self) -> Controller:
         """A new controller over the same database: what a process restart looks like."""
