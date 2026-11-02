@@ -8,7 +8,9 @@ double-books, never acts without your approval, and ignores instructions hidden 
 
 Everything runs locally: no real providers, no payments, and no LLM key needed.
 
-> Status: work in progress.
+> Status: the agent, mock API, CLI, web chat with live trace and 30 eval scenarios are built
+> (tier 1). Not yet built: cancellation fees and receipts, provider-cancel follow-up, the Bookings,
+> Memory and Settings pages, and the LLM adapters (the offline `rules` parser is used).
 
 ## Quick start
 
@@ -21,7 +23,8 @@ uv run gharmitra web       # chat + live trace at http://localhost:8000
 ```
 
 Terminal instead: `uv run gharmitra chat`, and `tail -f traces/latest.jsonl` in a second terminal
-for the trace.
+for the trace. `--scenario timeout_after_success` (or `injected_review`, `slot_taken`, `happy`) picks a
+mock world; `--user u-new` starts without booking history. In the web app, **Reset world** does the same.
 
 ## Example
 
@@ -29,19 +32,26 @@ for the trace.
 you> Find a plumber for my kitchen tap this week, mornings only, under ₹1,500
 gm > Which area are you in?
 you> Koramangala
-gm > 3 options:
-     1. Ravi Plumbing    ★4.6  Thu 5 Nov 09:00  ₹1,200
-     2. QuickFix Pipes   ★4.3  Wed 4 Nov 10:00  ₹950
-     3. HomeCare Plumb   ★4.1  Fri 6 Nov 08:00  ₹1,400
+gm > Any preferred provider? Say "no preference" to skip.
+you> no preference
+gm > Here are the best matches:
+     1. Ravi Plumbing  ★4.6  Mon 2 Nov 10:00  ₹1,200
+          "Good job overall, slightly late but called ahead."
+          [review hidden: suspicious content]
+     2. QuickFix Pipes  ★4.3  Mon 2 Nov 11:00  ₹950
+          "Reasonable price, explained the problem clearly."
+     3. HomeCare Plumbers  ★4.1  Mon 2 Nov 10:00  ₹1,400
+          "Did the work neatly and cleaned up after."
+     Pick a number.
 you> 1
 gm > Holding the slot. The provider quoted ₹1,200.
-     Book Ravi Plumbing, Thu 5 Nov 09:00, ₹1,200? (yes/no)
+     Book Ravi Plumbing, Mon 2 Nov 10:00, ₹1,200 (quoted). Confirm? (yes/no)
 you> yes
-gm > Booked and verified. Booking id BK-1042, receipt RCPT-2026-000001.
+gm > Booked and verified: Ravi Plumbing, Mon 2 Nov 10:00. Booking id BK-1001.
 ```
 
 Also: *"Move my AC servicing to Saturday"*, *"Book the same electrician as last time, but not before
-10 a.m."*, *"Cancel my cleaning booking"* (shows fee and refund first), *"What do you remember about
+10 a.m."*, *"Cancel my cleaning booking"* (shows the refund first), *"What do you remember about
 me?"*, *"Forget my area"*.
 
 ## How it works

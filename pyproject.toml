@@ -30,4 +30,4 @@ packages = ["src/gharmitra"]
 testpaths = ["tests"]
 addopts = "-q -m 'not live'"
 markers = ["live: calls the configured real model (opt-in)"]
-filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`:DeprecationWarning"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]

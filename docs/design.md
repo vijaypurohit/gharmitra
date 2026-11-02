@@ -155,7 +155,8 @@ known ("booking unconfirmed; I'll check again on your next message").
 Table `agent.facts`, one row per (user, key): area, earliest time, preferred technician per service,
 usual budget.
 
-- **Stated**: from `remember: true` or a yes to "save this?". Reused and announced ("Using your saved
+- **Stated**: only from `remember: true` ("remember that"); the agent never asks "save this?", so a later
+  "yes" can't be mistaken for one. Reused and announced ("Using your saved
   area: Koramangala").
 - **Inferred**: from `list_bookings` (e.g. same electrician twice). Never used silently; offered as a
   question, and a yes makes it stated.
@@ -181,17 +182,20 @@ invariants and the run report are computed from these events. Each verified acti
 frozen receipt (HTML, JSON, text).
 
 **Annotated excerpt**, [sample_timeout_after_success.jsonl](../traces/sample_timeout_after_success.jsonl)
-(eval E7; replaced with the exact lines once that run writes the file):
+(eval E7, written on every full test run):
 
 ```text
 seq type              payload (shortened)
- 41 approval          granted apr_7 book P-RAVI Thu 09:00 ₹1,200   ← user said "yes"
- 43 operation         started apr_7:book                           ← committed before the call
- 44 tool_call         book(H-88, apr_7:book) → timeout 2.0s        ← mock booked it anyway
- 45 operation         unknown
- 47 tool_call         get_booking_status(apr_7:book) → booked BK-1042  ← checked, not retried
- 48 operation         succeeded BK-1042; approval consumed
- 50 exit              completed                                    ← one book call, one booking
+ 34 user_msg          "yes"
+ 37 approval          granted apr_1 book P-RAVI ₹1,200 (user_turn)   ← only a user turn grants
+ 39 gate              allowed apr_1                                  ← fingerprint recomputed
+ 40 operation         started apr_1:book                             ← committed before the call
+ 41 tool_call         book(H-1, apr_1:book) → timeout 2000 ms        ← mock booked it anyway
+ 42 operation         unknown apr_1:book
+ 43 tool_call         get_booking_status(apr_1:book) → booked BK-1001 ← checked, not retried
+ 44 operation         succeeded apr_1:book BK-1001
+ 45 approval          consumed apr_1
+ 48 exit              completed (1 model call, 2 tool calls)         ← one book call, one booking
 ```
 
 ## 10. Cancellation policy and provider cancels
@@ -210,7 +214,8 @@ Schema in [migrations/](../src/gharmitra/migrations/). Money is `bigint` paise, 
 - `agent`: `users`, `sessions` (phase, task jsonb), `messages`, `approvals`, `operations`,
   `bookings` (agent's copy with price and policy snapshot), `refunds`, `receipts`, `facts`,
   `fact_events`, `trace_events`, `settings`.
-- `mock`: `providers`, `reviews`, `slots`, `holds`, `bookings`. Reached only through `ProviderAPI`.
+- `mock`: `providers`, `reviews`, `holds`, `bookings`, `idempotency` (first result per key, replayed),
+  `cancel_calls`. Free slots are generated from the seed. Reached only through `ProviderAPI`.
 - Constraints backing the rules: `operations.approval_id` unique (one execution per approval);
   `receipts.op_key` unique; partial unique on `bookings (user_id, provider_id, slot_start) WHERE
   status = 'booked'`; mock `bookings.idempotency_key` unique; check constraints on status columns.
@@ -229,6 +234,10 @@ Schema in [migrations/](../src/gharmitra/migrations/). Money is `bigint` paise, 
 - "Same electrician as last time" comes from `list_bookings`; it's a request, not an inferred fact.
 - A time limit in a request applies to that task; saved only if the user says so.
 - `list_bookings` has no price, so fees use the agent's booking copy.
+- A provider API client is bound to one user, like an authenticated client (`hold_slot` and `book`
+  take no user id). Prices cross the API in whole rupees; the agent keeps paise.
+- Each provider has four seeded slots a day between 08:00 and 18:00; a slot within the next hour
+  can't be held.
 
 ## 13. What breaks first at 100×
 
