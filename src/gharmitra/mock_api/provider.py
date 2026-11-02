@@ -102,7 +102,6 @@ class MockProviderAPI:
         self.catalogue = catalogue or load_catalogue()
         self.tz = clock.tz
         self.rng = random.Random(f"{scenario.seed}:outcomes")
-        self._hold_calls: dict[str, int] = {}
 
     # --- seeding ---------------------------------------------------------------
 
@@ -242,8 +241,8 @@ class MockProviderAPI:
             provider_id, day, day
         ):
             raise SlotUnavailable(f"{slot} is not available")
-        calls = self._hold_calls.get(provider_id, 0)
-        self._hold_calls[provider_id] = calls + 1
+        calls = self.scenario.hold_calls.get(provider_id, 0)
+        self.scenario.hold_calls[provider_id] = calls + 1
         drift = self.scenario.drift_for(provider_id, calls)
         if drift is None:
             drift = 0

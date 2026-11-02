@@ -33,6 +33,8 @@ class Scenario:
     injected_names: bool = False
     # Tool names that raise an unexpected internal error.
     fail_tools: set[str] = field(default_factory=set)
+    # hold_slot calls per provider so far; kept here so it survives a new client per turn.
+    hold_calls: dict[str, int] = field(default_factory=dict)
 
     def next_book_outcome(self) -> str | None:
         return self.book_outcomes.pop(0) if self.book_outcomes else None

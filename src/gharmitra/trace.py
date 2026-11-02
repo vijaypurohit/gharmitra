@@ -17,7 +17,9 @@ _PATTERNS = [
     (re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+"), "Bearer " + REDACTED),
     (re.compile(r"\b(sk|sk-ant|xai|gsk|AIza)[-_A-Za-z0-9]{16,}"), REDACTED),
     (re.compile(r"(postgres(?:ql)?://[^:/@\s]+:)[^@\s]+@"), r"\1" + REDACTED + "@"),
-    (re.compile(r"(?<![\d-])(?:\+91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}(?![\d-])"), "[phone]"),
+    # Word boundaries on both sides: a bare digit check also matched digit runs inside hex
+    # fingerprints and ids, corrupting them in the trace (docs/BUGS.md #2).
+    (re.compile(r"(?<![\w-])(?:\+91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}(?![\w-])"), "[phone]"),
 ]
 
 

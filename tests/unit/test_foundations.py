@@ -130,6 +130,15 @@ def test_tracer_sinks_and_contiguous_seq(schemas, clock, traces_dir):
     assert schemas.agent.scalar("select array_agg(seq order by seq) from trace_events") == [1, 2, 3]
 
 
+def test_bug_2_redaction_keeps_fingerprints_and_ids():
+    """BUGS.md #2: the phone pattern matched 10-digit runs inside hex fingerprints and replaced them."""
+    r = Redactor()
+    fp = "2c9e1f6834512709a3be0f9d7c41a2d3e5f6a7b8c9d0e1f2a3b4c5d6e7f80912"
+    ids = ["H-9845012345", "op_98450123456", "BK-1042"]
+    assert r({"fingerprint": fp, "ids": ids}) == {"fingerprint": fp, "ids": ids}
+    assert r("call 9845012345 now") == "call [phone] now"
+
+
 def test_bug_1_bundled_postgres_path_with_spaces():
     """BUGS.md #1: pgserver passes the socket dir unquoted; a data dir with a space failed to start."""
     import shutil

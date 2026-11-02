@@ -1,1 +1,107 @@
 """Builds the configured implementation of each interface (model, provider API, trace sinks, policy, renderers)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from gharmitra.agent.controller import Controller, Deps
+from gharmitra.catalogue import Catalogue, load_catalogue
+from gharmitra.clock import Clock, SystemClock
+from gharmitra.config import Limits, Settings, load_settings
+from gharmitra.db import Database, migrate, resolve_url
+from gharmitra.llm.base import ModelClient
+from gharmitra.llm.factory import make_model
+from gharmitra.llm.rules import RuleModel
+from gharmitra.mock_api import seed_data as sd
+from gharmitra.mock_api.provider import MockProviderAPI
+from gharmitra.mock_api.scenarios import Scenario, get_scenario
+from gharmitra.trace import JsonlSink, MemorySink, PostgresSink, Redactor, TraceSink
+
+
+@dataclass
+class World:
+    settings: Settings
+    agent_db: Database
+    mock_db: Database
+    clock: Clock
+    scenario: Scenario
+    catalogue: Catalogue
+    controller: Controller
+    memory_sink: MemorySink | None = None
+    crash_points: set[str] = field(default_factory=set)
+
+    def api(self, user_id: str) -> MockProviderAPI:
+        return MockProviderAPI(self.mock_db, self.clock, self.scenario, user_id, self.catalogue)
+
+    def restart(self) -> Controller:
+        """A new controller over the same database: what a process restart looks like."""
+        self.controller = Controller(self.controller.deps)
+        return self.controller
+
+
+def seed_agent(db: Database, clock: Clock, catalogue: Catalogue) -> None:
+    """Users and the agent's copies of the seeded past bookings (the mock has the originals)."""
+    if db.scalar("select count(*) from users"):
+        return
+    today = clock.now()
+    with db.tx():
+        for uid, name in ((sd.DEMO_USER, sd.DEMO_USER_NAME), (sd.NEW_USER, "New user")):
+            db.execute("insert into users (id, name) values (%s, %s)", (uid, name))
+        names = {pid: name for rows in sd.PROVIDERS.values() for pid, name, *_ in rows}
+        for n, b in enumerate(sd.PAST_BOOKINGS):
+            db.execute(
+                "insert into bookings (id, user_id, provider_id, provider_name, service, area, slot_start, price,"
+                " status, created_at, updated_at) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (f"BK-{901 + n}", b.user_id, b.provider_id, names[b.provider_id], b.service, b.area,
+                 sd.past_slot(today, b), b.price * 100, b.status, today, today),
+            )
+
+
+def build(
+    settings: Settings | None = None,
+    *,
+    url: str | None = None,
+    agent_schema: str = "agent",
+    mock_schema: str = "mock",
+    clock: Clock | None = None,
+    scenario: Scenario | None = None,
+    model: ModelClient | None = None,
+    sinks: list[TraceSink] | None = None,
+    limits: Limits | None = None,
+    crash_points: set[str] | None = None,
+) -> World:
+    settings = settings or load_settings()
+    url = url or resolve_url(settings.database_url, settings.data_dir)
+    agent_db, mock_db = Database(url, agent_schema), Database(url, mock_schema)
+    migrate(agent_db, "agent")
+    migrate(mock_db, "mock")
+    clock = clock or SystemClock()
+    catalogue = load_catalogue(settings.city)
+    scenario = scenario or get_scenario(settings.scenario, settings.seed)
+    MockProviderAPI(mock_db, clock, scenario, sd.DEMO_USER, catalogue).seed()
+    seed_agent(agent_db, clock, catalogue)
+
+    memory_sink = None
+    if sinks is None:
+        sinks = []
+        if "postgres" in settings.trace_sinks:
+            sinks.append(PostgresSink(agent_db))
+        if "jsonl" in settings.trace_sinks:
+            sinks.append(JsonlSink(settings.traces_dir))
+    model = model or make_model(settings)
+    crash_points = crash_points if crash_points is not None else set()
+    world: World
+    deps = Deps(
+        db=agent_db,
+        clock=clock,
+        catalogue=catalogue,
+        model=model,
+        fallback=RuleModel(catalogue),
+        api_for=lambda user_id: world.api(user_id),
+        sinks=sinks,
+        limits=limits or settings.limits,
+        redactor=Redactor(settings.secret_values()),
+        crash_points=crash_points,
+    )
+    world = World(settings, agent_db, mock_db, clock, scenario, catalogue, Controller(deps), memory_sink, crash_points)
+    return world
