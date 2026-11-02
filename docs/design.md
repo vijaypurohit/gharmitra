@@ -233,6 +233,8 @@ Schema in [migrations/](../src/gharmitra/migrations/). Money is `bigint` paise, 
 ## 12. Assumptions
 
 - Test clock Mon 2 Nov 2026, 09:00 IST; dates must be future and within 30 days.
+- Times are UTC inside (clock, database, provider API, traces, fingerprints). The user's timezone
+  (`TIMEZONE`) is used only for text the user reads and for calendar words ("today", "mornings").
 - "This week" = today–Sunday; "mornings" = 06:00–12:00; budget is inclusive, checked on the quoted price.
 - Price counts as paid at booking; no money moves. Holding needs no approval.
 - One active task per session; one user per CLI session.
