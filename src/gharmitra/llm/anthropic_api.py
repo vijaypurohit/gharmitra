@@ -14,7 +14,7 @@ from gharmitra.config import Settings
 from gharmitra.llm.base import ModelError, ModelResult, Prompt, Usage
 from gharmitra.llm.schema import strict_schema
 
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 MAX_TOKENS = 4096  # thinking counts against this; the intent itself is ~100 tokens
 # USD per million tokens (input, output), for the run report. Unknown models report no cost.
 PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50)}

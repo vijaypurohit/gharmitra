@@ -192,3 +192,12 @@ def test_rules_parse_booking_id_target():
 
     i = RuleModel().parse("Cancel booking BK-905", {"today": "2026-11-02"})
     assert i.goal == "cancel" and i.target.booking_id == "BK-905"
+
+
+def test_model_times_with_zone_suffix_are_local():
+    """Gemini returned "17:00:00Z"; an aware time must not reach comparisons with naive ones."""
+    from gharmitra.llm.base import Intent
+
+    i = Intent.model_validate({"act": "inform", "entities": {"time": {"earliest": "17:00:00Z", "latest": "21:00"}}})
+    assert i.entities.time.earliest.tzinfo is None and i.entities.time.earliest.hour == 17
+    assert i.entities.time.earliest < i.entities.time.latest

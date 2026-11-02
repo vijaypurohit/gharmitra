@@ -16,7 +16,7 @@ from gharmitra.config import Settings
 from gharmitra.llm.base import ModelError, ModelResult, Prompt, Usage
 from gharmitra.llm.schema import strict_schema
 
-DEFAULT_MODEL = "haiku"
+DEFAULT_MODEL = "sonnet"
 
 
 class ClaudeCliModel:

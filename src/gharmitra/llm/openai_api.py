@@ -1,8 +1,8 @@
 """openai adapter: the OpenAI chat-completions protocol over plain HTTP.
 
 One adapter serves OpenAI, Gemini, Ollama, LM Studio, OpenRouter, Groq and vLLM; MODEL_BASE_URL decides
-who answers. It asks for a strict JSON schema; if the server rejects `json_schema`, it drops to
-`json_object` once (the schema is in the system prompt either way) and stays there.
+who answers. It asks for a strict JSON schema; if the server rejects that request (HTTP 400), it drops
+to `json_object` once (the schema is in the system prompt either way) and stays there.
 """
 
 from __future__ import annotations
@@ -40,12 +40,13 @@ class OpenAIModel:
 
     def complete(self, prompt: Prompt) -> ModelResult:
         r = self._post(prompt)
-        if r.status_code == 400 and self.json_mode == "json_schema" and any(
-                w in r.text.lower() for w in ("response_format", "json_schema", "schema")):
+        if r.status_code == 400 and self.json_mode == "json_schema":
+            # Some servers reject strict schemas with a bare "invalid argument" (Gemini); retry once in
+            # JSON mode and remember. A 400 that persists is a real error.
             self.json_mode = "json_object"
             r = self._post(prompt)
-        if r.status_code == 429:
-            raise ModelError("rate_limited", f"429 {r.text[:200]}")
+        if r.status_code in (429, 503):  # rate limited, or "model overloaded" on free tiers
+            raise ModelError("rate_limited", f"{r.status_code} {r.text[:200]}")
         if r.status_code >= 400:
             raise ModelError("http_error", f"{r.status_code} {r.text[:200]}")
         try:

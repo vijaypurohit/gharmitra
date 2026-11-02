@@ -84,7 +84,7 @@ def test_openai_falls_back_to_json_object_when_schema_rejected():
         fmt = json.loads(req.content)["response_format"]["type"]
         formats.append(fmt)
         if fmt == "json_schema":
-            return httpx.Response(400, json={"error": {"message": "response_format json_schema not supported"}})
+            return httpx.Response(400, json={"error": {"message": "Request contains an invalid argument."}})
         return chat_reply("```json\n" + json.dumps(INTENT) + "\n```")
 
     model = openai_model(handler)
@@ -95,6 +95,7 @@ def test_openai_falls_back_to_json_object_when_schema_rejected():
 
 @pytest.mark.parametrize("respond, kind", [
     (lambda req: httpx.Response(429, text="Too Many Requests"), "rate_limited"),
+    (lambda req: httpx.Response(503, text="high demand"), "rate_limited"),
     (lambda req: httpx.Response(500, text="boom"), "http_error"),
     (lambda req: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=req)), "timeout"),
     (lambda req: httpx.Response(200, json={"nope": 1}), "bad_output"),
@@ -143,12 +144,12 @@ def test_anthropic_request_shape_usage_and_cost():
     body = json.loads(seen[0].content)
     assert seen[0].url.path == "/v1/messages"
     assert KEY in (seen[0].headers.get("x-api-key", "") + seen[0].headers.get("authorization", ""))
-    assert body["model"] == "claude-opus-5-5" and body["system"] == PROMPT.system
+    assert body["model"] == "claude-sonnet-5-5" and body["system"] == PROMPT.system
     assert body["output_config"]["effort"] == "low"
     assert body["output_config"]["format"]["type"] == "json_schema"
     assert "minimum" not in json.dumps(body["output_config"])
     assert json.loads(result.text) == INTENT
-    assert result.usage == Usage(1000, 50, round((1000 * 4 + 50 * 20) / 1e6, 6))
+    assert result.usage == Usage(1000, 50, round((1000 * 2 + 50 * 10) / 1e6, 6))
 
 
 @pytest.mark.parametrize("status, kind", [(429, "rate_limited"), (529, "http_error"), (400, "http_error")])
@@ -221,7 +222,7 @@ def test_claude_cli_runs_isolated_and_reads_structured_output(fake_claude, monke
     args = seen["args"]
     assert seen["stdin"] == "plumber in HSR tomorrow"  # the message is never an argument
     assert args[:3] == ["-p", "--output-format", "json"]
-    for flag, value in (("--tools", ""), ("--setting-sources", ""), ("--model", "haiku")):
+    for flag, value in (("--tools", ""), ("--setting-sources", ""), ("--model", "sonnet")):
         assert args[args.index(flag) + 1] == value
     assert "--no-session-persistence" in args and "--strict-mcp-config" in args
     assert json.loads(args[args.index("--json-schema") + 1])["additionalProperties"] is False
@@ -262,7 +263,7 @@ class StubModel:
 def test_registry_builtins_custom_class_and_fallback():
     assert make_model(Settings()).adapter == "rules"
     assert make_model(Settings(model_adapter="tests.unit.test_adapters:StubModel")).adapter == "stub"
-    assert make_model(Settings(model_adapter="anthropic", model_api_key=KEY)).model == "claude-opus-5-5"
+    assert make_model(Settings(model_adapter="anthropic", model_api_key=KEY)).model == "claude-sonnet-5-5"
     assert make_model(Settings(model_adapter="openai")).adapter == "rules"  # no MODEL_NAME: warn, use rules
     with pytest.raises(ValueError):
         make_model(Settings(model_adapter="nope"))

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date, time
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Act = Literal["request", "inform", "select", "confirm", "decline", "memory", "status", "unclear"]
 Goal = Literal["book", "reschedule", "cancel"]
@@ -28,6 +28,12 @@ class DateRange(_Strict):
 class TimeWindow(_Strict):
     earliest: time | None = None
     latest: time | None = None
+
+    @field_validator("earliest", "latest")
+    @classmethod
+    def _local(cls, v: time | None) -> time | None:
+        """Times are local wall-clock times; some models append "Z" ("17:00:00Z"). Drop the zone."""
+        return v.replace(tzinfo=None) if v is not None else None
 
 
 class ProviderRef(_Strict):
