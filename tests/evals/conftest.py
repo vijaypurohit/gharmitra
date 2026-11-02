@@ -65,6 +65,16 @@ def pytest_runtest_makereport(item, call):
             row["notes"] = "; ".join(filter(None, [row["notes"], message]))
 
 
+def _defined_evals() -> int:
+    from tests.evals import test_scenarios
+
+    return sum(
+        1 for f in vars(test_scenarios).values()
+        if any(m.name == "eval" for m in getattr(f, "pytestmark", []))
+    )
+
+
 def pytest_sessionfinish(session, exitstatus):
-    if RESULTS:
+    # Only a run that covers every scenario rewrites the table; `-k e7` leaves it alone.
+    if RESULTS and len(RESULTS) == _defined_evals():
         eval_table.write(list(RESULTS.values()))

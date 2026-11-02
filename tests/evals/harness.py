@@ -84,8 +84,8 @@ class EvalWorld:
     def mock(self):
         return self.world.mock_db
 
-    def new_session(self, user: str = sd.DEMO_USER) -> str:
-        self.session_id = self.controller.start_session(user)
+    def new_session(self, user: str = sd.DEMO_USER, session_id: str | None = None) -> str:
+        self.session_id = self.controller.start_session(user, session_id)
         return self.session_id
 
     def say(self, text: str, intent: Any, approval_id: str | None = None):

@@ -25,8 +25,8 @@ WEDNESDAY_TEXT = "Plumber on Wednesday morning under ₹1,500"
 WEDNESDAY = book(service="plumber", date=days("2026-11-04"), time=MORNING, budget_max=1500)
 
 
-def to_options(ev, text=PLUMBER_TEXT, intent=PLUMBER_REQUEST):
-    ev.new_session()
+def to_options(ev, text=PLUMBER_TEXT, intent=PLUMBER_REQUEST, session_id=None):
+    ev.new_session(session_id=session_id)
     ev.say(text, intent)
     ev.say("Koramangala", inform(area="Koramangala"))
     return ev.say("no preference", NO_PREF)
@@ -35,6 +35,14 @@ def to_options(ev, text=PLUMBER_TEXT, intent=PLUMBER_REQUEST):
 def to_approval(ev, n=1, **kw):
     to_options(ev, **kw)
     return ev.say(str(n), pick(n))
+
+
+def stable(event):
+    """Round measured latencies so the committed sample only changes when behaviour does."""
+    p = event["payload"]
+    if isinstance(p.get("latency_ms"), (int, float)):
+        p = {**p, "latency_ms": round(p["latency_ms"], -1)}
+    return {**event, "payload": p}
 
 
 def task(ev, session=None):
@@ -168,7 +176,7 @@ def test_e6_slot_change_after_approval(schemas, record):
        required=True)
 def test_e7_timeout_after_success(schemas, record):
     ev = record.world(make_world(schemas, "timeout_after_success"))
-    to_approval(ev)
+    to_approval(ev, session_id="eval-e7-timeout-after-success")
     ev.say("yes", YES)
     assert len(ev.tool_calls("book")) == 1
     assert ev.tool_calls("book")[0]["error"]["code"] == "timeout"
@@ -176,7 +184,7 @@ def test_e7_timeout_after_success(schemas, record):
     assert len(ev.mock_bookings()) == 1
     assert [o["status"] for o in ev.operations()] == ["succeeded"]
     sample = REPO / "traces" / "sample_timeout_after_success.jsonl"
-    sample.write_text("".join(json.dumps(e, ensure_ascii=False, default=str) + "\n" for e in ev.sink.events),
+    sample.write_text("".join(json.dumps(stable(e), ensure_ascii=False, default=str) + "\n" for e in ev.sink.events),
                       encoding="utf-8")
     record.check(notes="forced: timeout_booked; sample trace written")
 

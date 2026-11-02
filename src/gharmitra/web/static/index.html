@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GharMitra</title>
+  <link rel="icon" href="/static/logo.svg">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><img src="/static/logo.svg" alt="" width="28" height="28"><span>GharMitra</span></div>
+    <div class="controls">
+      <label>User <select id="user"></select></label>
+      <label>Scenario <select id="scenario"></select></label>
+      <button id="reset" class="ghost" title="Wipe the demo world and reseed it with this scenario">Reset world</button>
+      <button id="new" class="ghost">New chat</button>
+      <span id="model" class="pill"></span>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Panels">
+    <button data-tab="chat" class="active">Chat</button>
+    <button data-tab="trace">Trace</button>
+  </nav>
+
+  <main>
+    <section id="chat" class="panel active" aria-label="Chat">
+      <div id="messages" aria-live="polite"></div>
+      <form id="composer" autocomplete="off">
+        <input id="text" placeholder="e.g. Find a plumber for my kitchen tap this week, mornings only, under ₹1,500" autofocus>
+        <button type="submit">Send</button>
+      </form>
+      <div class="hints" id="hints"></div>
+    </section>
+
+    <section id="trace" class="panel" aria-label="Trace">
+      <div class="trace-head">
+        <strong>Trace</strong> <span id="session" class="mono muted"></span>
+        <div class="filters" role="group" aria-label="Filter">
+          <button data-filter="all" class="active">all</button>
+          <button data-filter="tools">tools</button>
+          <button data-filter="approvals">approvals</button>
+          <button data-filter="model">model</button>
+        </div>
+      </div>
+      <ol id="events" class="mono"></ol>
+    </section>
+  </main>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

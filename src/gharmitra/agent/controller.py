@@ -560,7 +560,9 @@ class Controller:
             task.optional_asked = True
             task.awaiting = "optional"
             names = {"time": "time of day", "budget_max": "budget", "provider": "provider"}
-            t.say(f"Any preferred {', '.join(names[k] for k in open_optional)}? Say \"no preference\" to skip.")
+            asked = [names[k] for k in open_optional]
+            listed = asked[0] if len(asked) == 1 else ", ".join(asked[:-1]) + " or " + asked[-1]
+            t.say(f"Any preferred {listed}? Say \"no preference\" to skip.")
             return
         self._search(t)
 

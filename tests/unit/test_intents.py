@@ -72,6 +72,11 @@ def test_dialogue_turns(text, expected):
         assert i[key] == value, (key, i)
 
 
+def test_service_without_a_verb_is_a_booking_request():
+    assert parse("plumber in HSR tomorrow morning")["goal"] == "book"
+    assert parse("plumber", awaiting="required")["act"] == "inform"
+
+
 def test_no_means_no_preference_when_asked_for_optional_fields():
     assert parse("no", awaiting="optional") == {"act": "inform", "entities": {"no_preference": True}, "confidence": 0.9}
     assert parse("no preference")["entities"] == {"no_preference": True}

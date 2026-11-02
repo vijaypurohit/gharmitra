@@ -84,6 +84,8 @@ class RuleModel:
 
         goal = self._goal(t)
         entities = self._entities(t, today)
+        if goal is None and "service" in entities and awaiting not in ("required", "optional"):
+            goal = "book"  # "plumber in HSR tomorrow" is a request even without a verb
         remember = bool(re.search(r"\b(remember|save (this|that|it)|always)\b", t))
         target = None
         if goal in ("reschedule", "cancel"):
