@@ -49,10 +49,11 @@ def to_approval(ev, n=1, **kw):
 
 
 def stable(event):
-    """Round measured latencies so the committed sample only changes when behaviour does."""
+    """Round measured latencies to 100 ms so the committed sample only changes when behaviour does
+    (database calls take a few ms and vary by machine; the simulated timeout is 2000 ms)."""
     p = event["payload"]
     if isinstance(p.get("latency_ms"), (int, float)):
-        p = {**p, "latency_ms": round(p["latency_ms"], -1)}
+        p = {**p, "latency_ms": round(p["latency_ms"], -2)}
     return {**event, "payload": p}
 
 
@@ -422,7 +423,7 @@ def test_e19_same_electrician(schemas, record):
     ev.say("no preference", NO_PREF)
     options = task(ev)["task"]["options"]
     assert options and all(o["provider_id"] == "E-SHARMA" for o in options)
-    assert all(datetime.fromisoformat(o["slot"]).hour >= 10 for o in options)
+    assert all(local_hour(datetime.fromisoformat(o["slot"])) >= 10 for o in options)
     assert not ev.db.all("select * from facts where key = 'time_earliest'")
     record.check()
 

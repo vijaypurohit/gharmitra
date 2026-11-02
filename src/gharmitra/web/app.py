@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from gharmitra import receipts, report
 from gharmitra.agent.cancellation import Policy, PolicyStore
-from gharmitra.clock import SystemClock
+from gharmitra.clock import SystemClock, local_today
 from gharmitra.config import EDITABLE, Settings, SettingsStore, editable_values, load_settings
 from gharmitra.db import drop_schema, jsonb, migrate
 from gharmitra.llm.factory import probe
@@ -295,7 +295,7 @@ def create_app(settings: Settings | None = None, world: World | None = None) -> 
     @api.post("/api/settings/test-model")
     def test_model(body: TestModelIn) -> dict:
         w = state.world
-        return probe(w.settings, body.text, w.clock.now().date())
+        return probe(w.settings, body.text, local_today(w.clock))
 
     @api.put("/api/policy")
     def put_policy(body: PolicyIn) -> dict:

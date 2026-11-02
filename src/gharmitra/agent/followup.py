@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from gharmitra import receipts
 from gharmitra.agent.cancellation import PolicyStore
 from gharmitra.agent.state import BookingRef, FieldValue
+from gharmitra.clock import utc_iso
 from gharmitra.money import format_inr
 
 if TYPE_CHECKING:
@@ -45,12 +46,12 @@ def _follow_up(c: Controller, t: Turn, copy: dict) -> None:
     db, now = c.deps.db, t.clock.now()
     credit = PolicyStore(db, t.clock).for_booking(copy["policy"] or None, copy["provider_id"]).provider_cancel_credit
     key = f"provider_cancel:{booking_id}"
-    slot_iso = copy["slot_start"].astimezone(t.clock.tz).isoformat()
+    slot_iso = utc_iso(copy["slot_start"])
     with db.tx():
         db.execute("update bookings set status = 'provider_cancelled', updated_at = %s where id = %s", (now, booking_id))
         db.execute("insert into refunds (booking_id, amount, fee, credit, op_key, created_at)"
                    " values (%s, %s, 0, %s, %s, %s)", (booking_id, copy["price"], credit, key, now))
-        receipt_no = receipts.write(db, op_key=key, kind="provider_cancel", booking_id=booking_id, user_id=t.user, now=now,
+        receipt_no = receipts.write(db, op_key=key, kind="provider_cancel", booking_id=booking_id, user_id=t.user, now=now, tz=t.clock.tz,
                                     data={"provider_id": copy["provider_id"], "provider_name": copy["provider_name"],
                                           "service": copy["service"], "service_label": t.label(copy["service"]),
                                           "slot": slot_iso, "slot_label": t.slot(slot_iso), "price": copy["price"],
@@ -66,7 +67,7 @@ def _follow_up(c: Controller, t: Turn, copy: dict) -> None:
     task = t.task
     task.goal = "book"
     task.replaces = BookingRef(id=booking_id, provider_id=copy["provider_id"], provider_name=copy["provider_name"],
-                               service=copy["service"], slot=slot.isoformat(), status="provider_cancelled",
+                               service=copy["service"], slot=slot_iso, status="provider_cancelled",
                                price=copy["price"], area=copy["area"])
     area, source = copy["area"], "user"
     if not area:

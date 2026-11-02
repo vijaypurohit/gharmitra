@@ -9,7 +9,7 @@ from gharmitra.agent.cancellation import PolicyStore
 from gharmitra.agent.controller import Controller, Deps, Reply
 from gharmitra.agent.followup import provider_cancelled
 from gharmitra.catalogue import Catalogue, load_catalogue
-from gharmitra.clock import Clock, SystemClock
+from gharmitra.clock import Clock, SystemClock, local
 from gharmitra.config import Limits, Settings, SettingsStore, apply_overrides, load_settings
 from gharmitra.db import Database, jsonb, migrate, resolve_url
 from gharmitra.llm.base import ModelClient
@@ -64,7 +64,7 @@ def seed_agent(db: Database, clock: Clock, catalogue: Catalogue) -> None:
     """Users and the agent's copies of the seeded past bookings (the mock has the originals)."""
     if db.scalar("select count(*) from users"):
         return
-    today = clock.now()
+    today = local(clock.now(), clock)  # seeded bookings sit at local wall-clock times
     policies = PolicyStore(db, clock)
     with db.tx():
         for uid, name in ((sd.DEMO_USER, sd.DEMO_USER_NAME), (sd.NEW_USER, "New user")):

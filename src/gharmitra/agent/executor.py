@@ -227,7 +227,7 @@ class Executor:
             data.update(price=v.amount, previous_slot=m.get("previous_slot"),
                         previous_slot_label=m.get("previous_slot_label"))
         return receipts.write(self.db, op_key=key, kind=v.action, booking_id=booking_id or "",
-                              user_id=m["user_id"], data=data, now=now)
+                              user_id=m["user_id"], data=data, now=now, tz=self.clock.tz)
 
     def _fail(self, op: dict, reason: str) -> Outcome:
         with self.db.tx():

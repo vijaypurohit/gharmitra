@@ -36,7 +36,7 @@ from gharmitra.agent.state import (
 )
 from gharmitra.agent.tools import Tools
 from gharmitra.catalogue import Catalogue
-from gharmitra.clock import Clock
+from gharmitra.clock import Clock, local_today
 from gharmitra.config import Limits
 from gharmitra.db import Database
 from gharmitra.llm.base import Entities, Intent, ModelClient
@@ -173,7 +173,7 @@ class Controller:
             t.budget.check_turns(session.turns)
             self._reconcile(t)
             parsed = self.parser(tracer).parse(
-                text, today=t.clock.now().date(), phase=session.phase.value, known_fields=t.task.known_fields(),
+                text, today=local_today(t.clock), phase=session.phase.value, known_fields=t.task.known_fields(),
                 awaiting=t.task.awaiting, budget=t.budget, options_shown=len(t.task.options),
             )
             i = parsed.intent

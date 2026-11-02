@@ -8,7 +8,7 @@ and text renderings show the same fields.
 from __future__ import annotations
 
 import html
-from datetime import datetime
+from datetime import datetime, tzinfo
 from typing import Any
 
 from gharmitra.db import Database, jsonb
@@ -19,12 +19,15 @@ TITLES = {"book": "Booking", "cancel": "Cancellation", "reschedule": "Reschedule
 
 
 def write(db: Database, *, op_key: str, kind: str, booking_id: str, user_id: str, data: dict[str, Any],
-          now: datetime) -> str:
-    """Call inside the transaction that records the verified outcome. Returns the receipt number."""
+          now: datetime, tz: tzinfo | None = None) -> str:
+    """Call inside the transaction that records the verified outcome. Returns the receipt number.
+    Stored times are UTC; `tz` (the user's timezone) only sets the human-readable issue time."""
     existing = db.scalar("select receipt_no from receipts where op_key = %s", (op_key,))
     if existing:
         return existing
-    receipt_no = f"GM-{now:%Y%m%d}-{db.scalar('select nextval(%s)', ('receipt_seq',)):04d}"
+    issued = now.astimezone(tz) if tz else now
+    data = {**data, "issued_label": f"{issued:%a} {issued.day} {issued:%b %Y %H:%M} {issued:%Z}".strip()}
+    receipt_no = f"GM-{issued:%Y%m%d}-{db.scalar('select nextval(%s)', ('receipt_seq',)):04d}"
     db.execute(
         "insert into receipts (receipt_no, op_key, kind, booking_id, user_id, data, created_at)"
         " values (%s, %s, %s, %s, %s, %s, %s)",
@@ -54,7 +57,7 @@ def lines(r: dict[str, Any]) -> list[tuple[str, str]]:
             rows.append(("Credit", format_inr(d["credit"])))
         if d.get("policy_note"):
             rows.append(("Policy", d["policy_note"]))
-    rows.append(("Issued", r["created_at"].isoformat(timespec="seconds")))
+    rows.append(("Issued", d.get("issued_label") or r["created_at"].isoformat(timespec="seconds")))
     return rows
 
 

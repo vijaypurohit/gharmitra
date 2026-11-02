@@ -1,4 +1,5 @@
 from collections import Counter
+from datetime import datetime
 
 import pytest
 
@@ -166,8 +167,9 @@ def test_reschedule_and_slot_conflict(schemas, clock):
     with pytest.raises(SlotConflict):
         api.reschedule(ac["id"], bad, "r1")
     moved = api.reschedule(ac["id"], good, "r2")
-    assert moved["slot"] == good and moved["status"] == "booked"
-    assert next(b for b in api.list_bookings(sd.DEMO_USER) if b["id"] == ac["id"])["slot"] == good
+    assert datetime.fromisoformat(moved["slot"]) == free[0] and moved["status"] == "booked"
+    assert moved["slot"].endswith("+00:00")  # times leave the API in UTC
+    assert datetime.fromisoformat(next(b for b in api.list_bookings(sd.DEMO_USER) if b["id"] == ac["id"])["slot"]) == free[0]
 
 
 def test_injected_names_scenario(schemas, clock):

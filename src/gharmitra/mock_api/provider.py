@@ -11,7 +11,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 
 from gharmitra.catalogue import Catalogue, load_catalogue
-from gharmitra.clock import Clock
+from gharmitra.clock import Clock, local, utc_iso
 from gharmitra.db import Database, jsonb
 from gharmitra.mock_api import seed_data as sd
 from gharmitra.mock_api.scenarios import Scenario
@@ -78,8 +78,14 @@ class ProviderAPI(Protocol):
     def reschedule(self, booking_id: str, new_slot: str, idempotency_key: str) -> dict: ...
 
 
-def _iso(dt: datetime, tz: Any) -> str:
-    return dt.astimezone(tz).isoformat()
+def _iso(dt: datetime, tz: Any = None) -> str:
+    """Times leave the API as UTC ISO strings, like a real provider's would."""
+    return utc_iso(dt)
+
+
+def _in(start: datetime, configured: set[str]) -> bool:
+    """Scenario slots may be written in any offset; compare instants, not strings."""
+    return any(datetime.fromisoformat(s) == start for s in configured)
 
 
 def _rupees(paise: int) -> int:
@@ -110,7 +116,7 @@ class MockProviderAPI:
         if self.db.scalar("select count(*) from providers"):
             return False
         s = self.scenario
-        today = self.clock.now()
+        today = local(self.clock.now(), self.clock)  # past bookings sit at local wall-clock times
         with self.db.tx() as conn:
             for service, rows in sd.PROVIDERS.items():
                 for i, (pid, name, price, rating, attrs) in enumerate(rows):
@@ -237,7 +243,7 @@ class MockProviderAPI:
         p = self._provider(provider_id)
         start = datetime.fromisoformat(slot)
         day = start.astimezone(self.tz).date()
-        if (provider_id, _iso(start, self.tz)) in self.scenario.unavailable_slots or start not in self.free_slots(
+        if _in(start, {s for p, s in self.scenario.unavailable_slots if p == provider_id}) or start not in self.free_slots(
             provider_id, day, day
         ):
             raise SlotUnavailable(f"{slot} is not available")
@@ -378,7 +384,7 @@ class MockProviderAPI:
         start = datetime.fromisoformat(new_slot)
         day = start.astimezone(self.tz).date()
         if (
-            _iso(start, self.tz) in self.scenario.conflict_slots
+            _in(start, self.scenario.conflict_slots)
             or b["status"] != "booked"
             or start not in self.free_slots(b["provider_id"], day, day)
         ):

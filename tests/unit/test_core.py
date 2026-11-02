@@ -284,3 +284,18 @@ def test_correct_keeps_stated_and_forget_blocks_inference(mem):
     assert [f["key"] for f in m.all("u1")] == ["area"]  # forgotten facts are never returned
     dump = str(db.all("select * from fact_events")) + str([e["payload"] for e in sink.events])
     assert "Koramangala" not in dump and "HSR" not in dump and "P-RAVI" not in dump
+
+
+def test_times_are_utc_inside_and_local_in_chat(schemas):
+    """Internal times (clock, API slots, task, trace) are UTC; only what the user reads is local (IST)."""
+    from tests.evals.harness import NO_PREF, book, days, make_world
+
+    ev = make_world(schemas)
+    assert ev.clock.now().utcoffset().total_seconds() == 0
+    ev.new_session()
+    ev.say("plumber", book(service="plumber", area="Koramangala", date=days("2026-11-04"), time={"earliest": "08:00"}))
+    reply = ev.say("no preference", NO_PREF)
+    slot = ev.controller.sessions.get(ev.session_id).task.options[0].slot
+    assert slot.endswith("+00:00") and slot.startswith("2026-11-04T02:30")  # 08:00 IST
+    assert "Wed 4 Nov 08:00" in reply.text  # shown in the user's timezone
+    assert all(e["ts"].endswith("+00:00") for e in ev.events())
