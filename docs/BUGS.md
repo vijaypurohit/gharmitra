@@ -39,3 +39,16 @@ Each entry: what broke, why, the fix, and the regression test that guards it.
 - **Regression test**:
   [`test_bug_3_redaction_keeps_token_counts`](../tests/unit/test_foundations.py), and
   [`test_report_totals_match_trace`](../tests/unit/test_cancellation.py) reads the counts back.
+
+## 4. The web app leaked Postgres connections
+
+- **What broke**: after step 17 added more web tests, a full `uv run pytest` failed with
+  `FATAL: sorry, too many clients already`, only while a dev server was also running.
+- **Why**: a `Database` keeps one connection per thread, and FastAPI runs requests on a thread pool.
+  Every settings save and every **Reset world** called `build()`, which opened new `Database` objects
+  and dropped the old ones without closing their connections. A long-running server would leak the
+  same way; the tests just hit Postgres's 100-connection limit first.
+- **Fix**: `build(dbs=...)` reuses the open databases when the app rebuilds, and the test fixture
+  closes every `Database` a test opened (`Database.instances`).
+- **Regression test**:
+  [`test_bug_4_rebuild_reuses_database_connections`](../tests/unit/test_settings.py)

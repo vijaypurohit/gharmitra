@@ -34,6 +34,7 @@ def schemas(pg_url: str):
     yield pair
     for db in (pair.agent, pair.mock):
         drop_schema(db)
+    for db in list(Database.instances):  # worlds built in the test open their own connections
         db.close()
 
 

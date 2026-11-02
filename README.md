@@ -77,11 +77,22 @@ which tool to call. Details in the [design note](docs/design.md).
 
 The default `rules` parser runs offline. To use an LLM, copy a block from
 [.env.example](.env.example) (Gemini, OpenAI, Anthropic, `claude` CLI, Ollama, LM Studio, OpenRouter,
-Groq) into `.env`. Switching provider is config only: `MODEL_ADAPTER`, `MODEL_BASE_URL`,
-`MODEL_NAME`, `MODEL_API_KEY`. A failed or invalid model reply falls back to `rules` for that turn.
+Groq) into `.env`, or pick the adapter in Settings. Switching provider is config only:
+`MODEL_ADAPTER`, `MODEL_BASE_URL`, `MODEL_NAME`, `MODEL_API_KEY`. A failed or invalid model reply
+falls back to `rules` for that turn; a misconfigured adapter (e.g. no `MODEL_NAME`) logs a warning and
+uses `rules`.
+
+| Adapter | Talks to | Structured output | Default model |
+|---|---|---|---|
+| `openai` | Any OpenAI-compatible `/chat/completions` (OpenAI, Gemini, Ollama, LM Studio, OpenRouter, Groq, vLLM) | Strict `json_schema`; drops to `json_object` once if the server rejects it | none, set `MODEL_NAME` |
+| `anthropic` | Claude Messages API via the official SDK | `output_config.format` JSON schema, `effort: low` | `claude-opus-5-5` (`claude-haiku-5-5` is much cheaper) |
+| `claude_cli` | Your logged-in `claude` CLI; no API key or credits | `--json-schema`; no tools, settings, MCP or saved session | `haiku` |
+| `module:Class` | Your own class with `complete(prompt) -> ModelResult` | — | — |
 
 Check a model: `uv run gharmitra check-model "plumber in HSR tomorrow morning"`, or **Test model** in
-Settings.
+Settings. `uv run pytest -m live` measures intent accuracy and runs four end-to-end flows with the
+configured model; results are in [docs/live_model_report.md](docs/live_model_report.md)
+(`claude_cli/haiku`: 25/25 intents, p50 4 s, all invariants held).
 
 ## Web app
 

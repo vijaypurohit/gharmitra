@@ -11,6 +11,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pgserver>=0.1.4",
     "pydantic>=2.14.2",
+    "anthropic>=2.4.0",
 ]
 
 [project.scripts]

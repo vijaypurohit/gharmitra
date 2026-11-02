@@ -10,6 +10,7 @@ import contextlib
 import json
 import re
 import threading
+import weakref
 from collections.abc import Iterator
 from importlib import resources
 from pathlib import Path
@@ -73,6 +74,8 @@ def jsonb(value: Any) -> Jsonb:
 
 
 class Database:
+    instances: weakref.WeakSet[Database] = weakref.WeakSet()  # tests close every one they opened
+
     def __init__(self, url: str, schema: str) -> None:
         if not _SCHEMA_NAME.match(schema):
             raise ValueError(f"bad schema name: {schema!r}")
@@ -81,6 +84,7 @@ class Database:
         self._local = threading.local()
         self._all: list[psycopg.Connection] = []
         self._lock = threading.Lock()
+        Database.instances.add(self)
 
     @property
     def conn(self) -> psycopg.Connection:

@@ -92,10 +92,15 @@ def build(
     sinks: list[TraceSink] | None = None,
     limits: Limits | None = None,
     crash_points: set[str] | None = None,
+    dbs: tuple[Database, Database] | None = None,
 ) -> World:
+    """`dbs` reuses open (agent, mock) databases, e.g. when the web app applies new settings."""
     settings = settings or load_settings()
-    url = url or resolve_url(settings.database_url, settings.data_dir)
-    agent_db, mock_db = Database(url, agent_schema), Database(url, mock_schema)
+    if dbs is not None:
+        agent_db, mock_db = dbs
+    else:
+        url = url or resolve_url(settings.database_url, settings.data_dir)
+        agent_db, mock_db = Database(url, agent_schema), Database(url, mock_schema)
     migrate(agent_db, "agent")
     migrate(mock_db, "mock")
     settings = apply_overrides(settings, SettingsStore(agent_db).get())  # defaults < env < Settings page

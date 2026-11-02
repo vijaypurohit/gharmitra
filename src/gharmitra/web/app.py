@@ -110,8 +110,7 @@ class App:
 
     def _build(self, scenario: Scenario) -> None:
         w = self.world
-        self.world = build(self.settings, url=w.agent_db.url, agent_schema=w.agent_db.schema,
-                           mock_schema=w.mock_db.schema, clock=w.clock, scenario=scenario)
+        self.world = build(self.settings, dbs=(w.agent_db, w.mock_db), clock=w.clock, scenario=scenario)
 
 
 def create_app(settings: Settings | None = None, world: World | None = None) -> FastAPI:
@@ -127,7 +126,7 @@ def create_app(settings: Settings | None = None, world: World | None = None) -> 
     @api.get("/api/info")
     def info() -> dict:
         w = state.world
-        return {"model": w.settings.model_adapter, "scenario": w.scenario.name, "city": w.catalogue.city,
+        return {"model": w.controller.deps.model.adapter, "scenario": w.scenario.name, "city": w.catalogue.city,
                 "users": [{"id": sd.DEMO_USER, "name": f"{sd.DEMO_USER_NAME} (has history)"},
                           {"id": sd.NEW_USER, "name": "New user"}],
                 "scenarios": [{"name": n, "note": SCENARIO_NOTES.get(n, "")} for n in SCENARIOS]}

@@ -137,10 +137,11 @@ class EvalWorld:
 
 
 def make_world(schemas, scenario: str = "happy", *, limits: Limits | None = None, crash: set[str] | None = None,
-               **overrides: Any) -> EvalWorld:
+               model: Any = None, **overrides: Any) -> EvalWorld:
+    """`model` defaults to a ScriptedModel; the live tests pass a recording wrapper around a real one."""
     clock = FakeClock()
     sink = MemorySink()
-    model = ScriptedModel()
+    model = model or ScriptedModel()
     settings = Settings(model_api_key=FAKE_SECRET, trace_sinks=())
     world = build(
         settings, url=schemas.agent.url, agent_schema=schemas.agent.schema, mock_schema=schemas.mock.schema,
@@ -255,7 +256,7 @@ def check_invariants(ev: EvalWorld) -> list[str]:
     for p in ev.tool_calls():
         if not {"name", "args", "result", "error", "latency_ms"} <= set(p):
             problems.append(f"I6: tool_call missing fields {p.get('name')}")
-    model_events = [e for e in ev.events("model_call") if e["payload"]["adapter"] == "scripted"]
+    model_events = [e for e in ev.events("model_call") if e["payload"]["adapter"] == ev.model.adapter]
     if len(model_events) != len(ev.model.prompts):
         problems.append(f"I6: {len(ev.model.prompts)} model calls but {len(model_events)} model_call events")
     dump = json.dumps(events, default=str, ensure_ascii=False)

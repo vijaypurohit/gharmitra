@@ -86,3 +86,15 @@ def test_memory_api_correct_and_forget(schemas):
     assert [(f["key"], f["status"], f["display"]) for f in facts] == [("area", "stated", "HSR Layout")]
     assert c.delete("/api/memory/area").json()["forgotten"] is True
     assert c.get("/api/memory").json() == []
+
+
+def test_bug_4_rebuild_reuses_database_connections(schemas):
+    """BUGS.md #4: every settings save or reset opened new Database objects and never closed the old ones."""
+    c, _ = client(schemas)
+    gm = c.app.state.gm
+    agent_db = gm.world.agent_db
+    for n in range(3):
+        c.put("/api/settings", json={"changes": {"limits.tool_calls_per_turn": 10 + n}})
+    c.post("/api/reset", json={"scenario": "happy"})
+    assert gm.world.agent_db is agent_db
+    assert agent_db.scalar("select count(*) from pg_stat_activity where datname = current_database()") < 40

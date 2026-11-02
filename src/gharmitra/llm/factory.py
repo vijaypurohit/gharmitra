@@ -14,24 +14,52 @@ from gharmitra.llm.rules import RuleModel
 log = logging.getLogger(__name__)
 
 
-def make_model(settings: Settings) -> ModelClient:
+BUILTIN = {"openai": "gharmitra.llm.openai_api:OpenAIModel",
+           "anthropic": "gharmitra.llm.anthropic_api:AnthropicModel",
+           "claude_cli": "gharmitra.llm.claude_cli:ClaudeCliModel"}
+
+
+class Paced:
+    """Keeps at least `interval` seconds between calls (free tiers limit requests per minute)."""
+
+    def __init__(self, inner: ModelClient, interval: float, sleep=time.sleep, now=time.monotonic) -> None:
+        self.inner, self.interval, self.sleep, self.now = inner, interval, sleep, now
+        self.adapter, self.model = inner.adapter, inner.model
+        self.last: float | None = None
+
+    def complete(self, prompt):  # type: ignore[no-untyped-def]
+        if self.last is not None and (wait := self.last + self.interval - self.now()) > 0:
+            self.sleep(wait)
+        try:
+            return self.inner.complete(prompt)
+        finally:
+            self.last = self.now()
+
+
+def _load(path: str):  # type: ignore[no-untyped-def]
+    module, _, cls = path.partition(":")
+    return getattr(importlib.import_module(module), cls)
+
+
+def make_model(settings: Settings, *, strict: bool = False) -> ModelClient:
+    """The configured adapter. A misconfigured one (e.g. no MODEL_NAME) logs a warning and falls back
+    to the rules parser, unless `strict`."""
     name = settings.model_adapter
     if name == "rules":
         return RuleModel()
-    if ":" in name:
-        module, _, cls = name.partition(":")
-        return getattr(importlib.import_module(module), cls)(settings)
-    builtin = {"openai": "gharmitra.llm.openai_api:OpenAIModel",
-               "anthropic": "gharmitra.llm.anthropic_api:AnthropicModel",
-               "claude_cli": "gharmitra.llm.claude_cli:ClaudeCliModel"}
-    if name not in builtin:
-        raise ValueError(f"unknown MODEL_ADAPTER {name!r}")
-    module, _, cls = builtin[name].partition(":")
+    path = name if ":" in name else BUILTIN.get(name)
+    if path is None:
+        raise ValueError(f"unknown MODEL_ADAPTER {name!r}; use rules, {', '.join(BUILTIN)} or module:Class")
     try:
-        return getattr(importlib.import_module(module), cls)(settings)
-    except AttributeError:
-        log.warning("model adapter %s is not built yet; using rules", name)
+        model = _load(path)(settings)
+    except (ValueError, ImportError) as exc:
+        if strict:
+            raise
+        log.warning("model adapter %s unavailable (%s); using rules", name, exc)
         return RuleModel()
+    if settings.model_min_interval_s > 0:
+        return Paced(model, settings.model_min_interval_s)  # type: ignore[return-value]
+    return model
 
 
 def probe(settings: Settings, text: str, today: date | None = None) -> dict:
@@ -40,7 +68,11 @@ def probe(settings: Settings, text: str, today: date | None = None) -> dict:
     from gharmitra.llm.base import Intent, ModelError
     from gharmitra.llm.prompt import build_prompt
 
-    model = make_model(settings)
+    try:
+        model = make_model(settings, strict=True)
+    except (ValueError, ImportError) as exc:
+        return {"adapter": settings.model_adapter, "model": settings.model_name, "ok": False,
+                "error": "config", "detail": str(exc)}
     prompt = build_prompt(text, today=today or date.today(), catalogue=load_catalogue(settings.city),
                           phase="COLLECTING", known_fields=[], awaiting=None)
     out: dict = {"adapter": model.adapter, "model": model.model}

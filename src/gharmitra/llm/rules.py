@@ -31,6 +31,12 @@ MEMORY_KEYS = [
 ]
 
 
+def _all_in(t: str, words: set[str]) -> bool:
+    """Every comma-separated part is a known reply word, e.g. "haan, book it"."""
+    parts = [x.strip() for x in t.split(",")]
+    return all(x in words for x in parts)
+
+
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower().replace("’", "'")).strip(" .!?")
 
@@ -73,9 +79,9 @@ class RuleModel:
             return Intent(act="memory", memory=memory, confidence=0.9)
         if awaiting == "optional" and t in NO_PREFERENCE:
             return Intent(act="inform", entities={"no_preference": True}, confidence=0.9)
-        if t in YES:
+        if _all_in(t, YES):  # "yes", "haan, book it"
             return Intent(act="confirm", confidence=0.95)
-        if t in NO:
+        if _all_in(t, NO):  # "no", "no, don't"
             return Intent(act="decline", confidence=0.95)
         if (option := self._option(t)) is not None:
             return Intent(act="select", option=option, confidence=0.9)
