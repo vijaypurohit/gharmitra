@@ -15,7 +15,7 @@
 
 ```mermaid
 flowchart LR
-    U[User message] --> P["ModelClient.parse()"]
+    U[User message] --> P["ModelClient.complete()"]
     P -->|Intent| N[validate +<br/>normalise]
     N --> C[Controller<br/>state machine]
     C -->|read-only| R["search · get_provider<br/>list_bookings · hold_slot"]
@@ -52,7 +52,7 @@ flowchart LR
 
 | Interface | Implementations |
 |---|---|
-| `ModelClient` | `rules` (default), `openai`-compatible, `anthropic`, `claude_cli`, `scripted` (evals), `module:Class` |
+| `ModelClient` | `rules` (default), `openai`-compatible (strict JSON schema), `anthropic` (SDK, structured output), `claude_cli` (`--json-schema`, no tools), `scripted` (evals), `module:Class`; optional pacing |
 | `ProviderAPI` | Seeded in-process mock; a real client could replace it |
 | `TraceSink` | Postgres + JSONL |
 
@@ -254,9 +254,9 @@ Schema in [migrations/](../src/gharmitra/migrations/). Money is `bigint` paise, 
 
 | Breaks first | What I'd change |
 |---|---|
-| Postgres writes: task, messages and ~10 trace rows per turn, plus `NOTIFY` | Pool connections, batch trace writes, move traces to a log store |
+| Postgres: task, messages and ~10 trace rows per turn; one connection per web thread; SSE polls `trace_events` | Pool connections, batch trace writes, push trace events (`LISTEN/NOTIFY` or a broker) instead of polling, move traces to a log store |
 | Workers: the executor runs in the chat request; timeouts and backoff hold it | Queue operations for workers; the chat polls the operation |
-| Startup reconciliation scans every open operation | Per-session lease; background sweeper |
+| Open operations are reconciled only when their session sends a message | Per-session lease; a background sweeper for abandoned sessions |
 | Slot contention: more `slot_taken`, more voided approvals | Fewer, fresher options; re-check before holding; shorter holds |
 | Model cost and rate limits | Rules first, model only when unsure (routing); cache by normalised message |
 

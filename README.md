@@ -8,9 +8,9 @@ double-books, never acts without your approval, and ignores instructions hidden 
 
 Everything runs locally: no real providers, no payments, and no LLM key needed.
 
-> Status: the agent, mock API, CLI, web chat with live trace, provider-cancel follow-up and 32 eval
-> scenarios are built. Not yet built: cancellation fees and receipts, the Bookings, Memory and
-> Settings pages, and the LLM adapters (the offline `rules` parser is used).
+> Status: complete. Agent, mock provider API, CLI, web app (chat with live trace, Bookings, Memory,
+> Settings), cancellation fees and receipts, provider-cancel follow-up, LLM adapters, and 34 eval
+> scenarios that all pass. The demo video link is below once recorded.
 
 ## Quick start
 
@@ -25,6 +25,8 @@ uv run gharmitra web       # chat + live trace at http://localhost:8000
 Terminal instead: `uv run gharmitra chat`, and `tail -f traces/latest.jsonl` in a second terminal
 for the trace. `--scenario timeout_after_success` (or `injected_review`, `slot_taken`, `happy`) picks a
 mock world; `--user u-new` starts without booking history. In the web app, **Reset world** does the same.
+Totals for a session (model and tool calls, approvals, receipts, exits), from its trace:
+`uv run gharmitra report <session_id>`, or **Run report** in the web app.
 
 Provider cancels: type `/provider-cancels BK-905` in the CLI, or use **Provider cancels…** in the web
 app. The agent checks the cancellation with the provider, records a full refund plus a ₹100 credit,
@@ -51,7 +53,7 @@ you> 1
 gm > Holding the slot. The provider quoted ₹1,200.
      Book Ravi Plumbing, Mon 2 Nov 10:00, ₹1,200 (quoted). Confirm? (yes/no)
 you> yes
-gm > Booked and verified: Ravi Plumbing, Mon 2 Nov 10:00. Booking id BK-1001.
+gm > Booked and verified: Ravi Plumbing, Mon 2 Nov 10:00. Booking id BK-1001. Receipt GM-20261102-0001.
 ```
 
 Also: *"Move my AC servicing to Saturday"*, *"Book the same electrician as last time, but not before
@@ -166,10 +168,11 @@ Settings. API keys and `DATABASE_URL` are env-only and never stored or returned.
 
 ## Tests
 
-- `uv run pytest`: unit tests and 30+ eval scenarios, offline and reproducible with a scripted model
+- `uv run pytest`: ~180 unit tests and 34 eval scenarios, offline and reproducible with a scripted model
   and seeded mock. Every eval also checks invariants such as "no booking without a matching
   approval". Writes [docs/eval_table.md](docs/eval_table.md).
-- `uv run pytest -m live`: optional checks against the configured model. Skipped by default.
+- `uv run pytest -m live`: optional intent-accuracy and end-to-end checks against the configured model;
+  writes [docs/live_model_report.md](docs/live_model_report.md). Skipped by default.
 
 See the [test plan](docs/test-plan.md).
 
@@ -185,8 +188,8 @@ src/gharmitra/
   cities/      city catalogue (services, areas, aliases); one JSON file per city
   migrations/  SQL migrations, shipped with the package
   wiring.py    picks the configured implementation of each component
-  db.py · trace.py · receipts.py · config.py · catalogue.py · clock.py · money.py · cli.py
-tests/         unit tests and eval scenarios (evals/ also writes the eval table)
+  db.py · trace.py · receipts.py · report.py · config.py · catalogue.py · clock.py · money.py · cli.py
+tests/         unit tests, eval scenarios (evals/ also writes the eval table), live model checks
 docs/          design note, plans, eval table, bug log
 traces/        JSONL traces; sample_*.jsonl are committed
 ```
@@ -197,7 +200,8 @@ traces/        JSONL traces; sample_*.jsonl are committed
 |---|---|
 | Design note | [docs/design.md](docs/design.md) |
 | Eval table (generated) | [docs/eval_table.md](docs/eval_table.md) |
-| Three bugs and their regression tests | [docs/BUGS.md](docs/BUGS.md) |
+| Bugs found while building, with regression tests | [docs/BUGS.md](docs/BUGS.md) |
+| Demo script | [docs/demo-script.md](docs/demo-script.md) |
 | Trace with a timeout after success | [traces/sample_timeout_after_success.jsonl](traces/sample_timeout_after_success.jsonl) |
 | Demo video | link added after recording |
 
