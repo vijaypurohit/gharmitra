@@ -4,10 +4,10 @@
   "locale": "en-IN",
   "timezone": "Asia/Kolkata",
   "services": {
-    "plumber": {"label": "Plumber", "aliases": ["plumber", "plumbing", "tap", "leak", "pipe", "nal"]},
-    "electrician": {"label": "Electrician", "aliases": ["electrician", "electrical", "wiring", "switch", "fan", "bijli"]},
-    "ac_servicing": {"label": "AC servicing", "aliases": ["ac servicing", "ac service", "ac repair", "air conditioner", "ac"]},
-    "cleaning": {"label": "Home cleaning", "aliases": ["cleaning", "cleaner", "deep clean", "safai"]}
+    "plumber": {"label": "Plumber", "aliases": ["plumber", "plumbing", "tap", "leak", "pipe", "nal", "sink", "drain", "leaking", "dripping", "toilet", "flush", "nal wala"]},
+    "electrician": {"label": "Electrician", "aliases": ["electrician", "electrical", "wiring", "switch", "fan", "bijli", "socket", "sparking", "light", "lights", "mcb", "short circuit", "power", "bijli wala"]},
+    "ac_servicing": {"label": "AC servicing", "aliases": ["ac servicing", "ac service", "ac repair", "air conditioner", "ac", "ac wala", "not cooling", "aircon"]},
+    "cleaning": {"label": "Home cleaning", "aliases": ["cleaning", "cleaner", "deep clean", "safai", "clean", "maid", "housekeeping", "house cleaning", "deep cleaning"]}
   },
   "areas": {
     "Koramangala": ["koramangala", "kormangala", "kora"],

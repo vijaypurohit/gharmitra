@@ -11,6 +11,8 @@ from gharmitra.llm.base import Intent, ModelResult, Prompt
 
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 _WEEKDAY_RE = r"(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(day|sday|nesday|rsday|urday)?"
+HINDI_WEEKDAYS = {"somvar": 0, "mangalvar": 1, "budhvar": 2, "guruvar": 3, "brihaspativar": 3, "shukravar": 4,
+                  "shanivar": 5, "ravivar": 6}
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 ORDINALS = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fourth": 4, "4th": 4}
 
@@ -20,6 +22,21 @@ NO = {"no", "n", "nope", "nah", "decline", "don't", "dont", "stop", "nahi", "nev
       "cancel that"}
 NO_PREFERENCE = {"no preference", "any", "anything", "anytime", "any time", "doesn't matter", "doesnt matter",
                  "none", "no", "nothing", "whatever", "flexible", "no preferences"}
+
+# Whole-reply vocabularies: a reply made only of these words (with at least one strong word) is a yes or a no.
+# "Yes, go ahead and book it", "haan ji", "👍", "not now, thanks", "nahi rehne do".
+YES_STRONG = {"yes", "y", "yeah", "yep", "yup", "ok", "okay", "sure", "haan", "ha", "han", "confirm", "confirmed",
+              "correct", "proceed", "perfect", "done", "book", "👍", "✅", "absolutely", "definitely"}
+YES_FILLER = {"please", "go", "ahead", "and", "it", "do", "that", "sounds", "good", "great", "fine", "thanks",
+              "thank", "you", "ji", "kar", "karo", "do", "theek", "hai", "with", "the", "booking", "lets", "let's"}
+NO_STRONG = {"no", "n", "nope", "nah", "don't", "dont", "not", "stop", "nahi", "nahin", "never", "decline", "skip",
+             "rehne", "👎", "❌"}
+NO_FILLER = {"now", "thanks", "thank", "you", "do", "it", "that", "mind", "cancel", "leave", "please", "ji", "dena",
+             "hai", "want", "i", "this", "one", "for", "later", "maybe"}
+NOPREF_WORDS = {"no", "nope", "none", "nothing", "any", "anything", "anytime", "anyone", "anybody", "whatever",
+                "fine", "is", "ok", "okay", "flexible", "doesn't", "doesnt", "matter", "preference", "preferences",
+                "works", "all", "good", "time", "day", "i'm", "im", "am", "really", "particular", "specific",
+                "koi", "bhi", "chalega", "sab", "theek", "hai", "thanks", "with"}
 
 TIME_PARTS = {"morning": (time(6), time(12)), "afternoon": (time(12), time(17)), "evening": (time(17), time(21)),
               "subah": (time(6), time(12)), "shaam": (time(17), time(21))}
@@ -35,6 +52,16 @@ def _all_in(t: str, words: set[str]) -> bool:
     """Every comma-separated part is a known reply word, e.g. "haan, book it"."""
     parts = [x.strip() for x in t.split(",")]
     return all(x in words for x in parts)
+
+
+def _tokens(t: str) -> list[str]:
+    return re.findall(r"[\w']+|[👍👎✅❌]", t)
+
+
+def _only(t: str, strong: set[str], filler: set[str]) -> bool:
+    """The whole reply is made of these words, with at least one strong one."""
+    toks = _tokens(t)
+    return bool(toks) and all(w in strong or w in filler for w in toks) and any(w in strong for w in toks)
 
 
 def _clean(text: str) -> str:
@@ -77,15 +104,17 @@ class RuleModel:
 
         if (memory := self._memory(t)) is not None:
             return Intent(act="memory", memory=memory, confidence=0.9)
-        if awaiting == "optional" and t in NO_PREFERENCE:
+        if awaiting == "optional" and (t in NO_PREFERENCE or _only(t, NOPREF_WORDS, set())):
             return Intent(act="inform", entities={"no_preference": True}, confidence=0.9)
-        if _all_in(t, YES):  # "yes", "haan, book it"
+        if _all_in(t, YES) or _only(t, YES_STRONG, YES_FILLER):  # "yes", "haan, book it", "Yes, go ahead"
             return Intent(act="confirm", confidence=0.95)
-        if _all_in(t, NO):  # "no", "no, don't"
+        if _all_in(t, NO) or _only(t, NO_STRONG, NO_FILLER):  # "no, don't", "not now, thanks"
             return Intent(act="decline", confidence=0.95)
-        if (option := self._option(t)) is not None:
+        if (option := self._option(t, awaiting)) is not None:
             return Intent(act="select", option=option, confidence=0.9)
-        if re.search(r"\b(my bookings|show (my )?bookings|what have i booked|upcoming bookings|booking status)\b", t):
+        if re.search(r"\b(my (bookings|appointments)|show (my )?(bookings|appointments)|what('s| is| have i|'ve i)? "
+                     r"booked|upcoming (bookings|appointments|visits)|booking status|anything (scheduled|booked)|"
+                     r"what do i have (booked|scheduled|coming up))\b", t):
             return Intent(act="status", confidence=0.9)
 
         goal = self._goal(t)
@@ -105,20 +134,21 @@ class RuleModel:
             return Intent(act="request", goal=goal, entities=entities, target=target, remember=remember, confidence=0.9)
         if entities:
             return Intent(act="inform", entities=entities, remember=remember, confidence=0.85)
-        if awaiting == "optional" and re.search(r"\b(no|none|any)\b", t):
+        if awaiting == "optional" and re.search(r"\b(no|nope|none|any|anything|whatever|flexible)\b", t):
             return Intent(act="inform", entities={"no_preference": True}, confidence=0.7)
         return Intent(act="unclear", confidence=0.2)
 
     # --- pieces --------------------------------------------------------------------------
 
     def _memory(self, t: str) -> dict | None:
-        if re.search(r"what do you (remember|know)( about me)?|show (my )?(memory|preferences|saved)|my preferences", t):
+        if re.search(r"what do you (remember|know)( about me)?|show (my )?(saved )?(memory|preferences|saved)|"
+                     r"my (saved )?preferences", t):
             return {"op": "view"}
-        if m := re.match(r"forget (?:my |the )?(.+)", t):
+        if m := re.search(r"\bforget (?:about )?(?:my |the )?(.+)", t):
             key = self._memory_key(m.group(1))
             return {"op": "forget", "key": key} if key else None
         m = re.match(r"(?:change|update|correct|set) my (?:saved )?(.+?) to (.+)", t)
-        if m:
+        if m and not re.search(r"\b(appointment|booking|visit|slot)\b", m.group(1)):  # those are reschedules
             key = self._memory_key(m.group(1))
             if key:
                 return {"op": "correct", "key": key, "value": m.group(2).strip()}
@@ -134,7 +164,12 @@ class RuleModel:
         return None
 
     @staticmethod
-    def _option(t: str) -> int | None:
+    def _option(t: str, awaiting: str | None = None) -> int | None:
+        if awaiting == "select" and (m := re.fullmatch(
+                r"(?:i'?ll |i will |let'?s |lets |i'?d like to |i want to )?(?:go with|take|pick|choose|select|do|book)"
+                r" (?:the |option |number )?(first|second|third|fourth|1st|2nd|3rd|4th|[1-8])(?: one| option)?(?: please)?",
+                t)):
+            return ORDINALS.get(m.group(1)) or int(m.group(1))
         if m := re.fullmatch(r"(?:option |number |no\.? |#)?([1-8])(?:st|nd|rd|th)?(?: one| option| please)?", t):
             return int(m.group(1))
         if m := re.fullmatch(r"(?:the |option |i'll take the |take the )?(first|second|third|fourth|1st|2nd|3rd|4th)(?: one| option)?(?: please)?", t):
@@ -145,11 +180,14 @@ class RuleModel:
 
     @staticmethod
     def _goal(t: str) -> str | None:
-        if re.search(r"\b(cancel|call off)\b", t):
+        if re.search(r"\b(cancel|call off)\b|\b(don'?t|do not|no longer) need\b.*\b(any ?more|now)\b|"
+                     r"\bno longer (need|want)\b|\bnahi chahiye\b", t):
             return "cancel"
-        if re.search(r"\b(move|reschedule|shift|postpone|prepone)\b", t):
+        if re.search(r"\b(move|reschedule|shift|postpone|prepone|push)\b", t) or re.search(
+                r"\b(change|bring forward|delay)\b.*\b(appointment|booking|visit|slot|service)\b", t):
             return "reschedule"
-        if re.search(r"\b(book|find|need|want|get me|looking for|search|karwana|chahiye)\b", t):
+        if re.search(r"\b(book|find|need|want|get me|looking for|search|karwana|chahiye|bhejo|schedule|arrange|"
+                     r"send|call|fix|repair)\b", t):
             return "book"
         return None
 
@@ -182,20 +220,30 @@ class RuleModel:
             return d, d
         if re.search(r"\btoday|aaj\b", t):
             return today, today
+        if "weekend" in t:
+            sat = today + timedelta(days=(5 - today.weekday()) % 7)
+            if "next weekend" in t and sat <= sunday:
+                sat += timedelta(days=7)
+            return sat, sat + timedelta(days=1)
         if "next week" in t:
             start = sunday + timedelta(days=1)
             return start, start + timedelta(days=6)
-        if "this week" in t:
+        if re.search(r"\bthis week\b|\bis hafte\b", t):
             return today, sunday
-        if "weekend" in t:
-            sat = today + timedelta(days=(5 - today.weekday()) % 7)
-            return sat, sat + timedelta(days=1)
-        if m := re.search(rf"\b(next )?{_WEEKDAY_RE}\b", t):
-            wanted = [w[:3] for w in WEEKDAYS].index(m.group(2)[:3])
-            d = today + timedelta(days=(wanted - today.weekday()) % 7)
-            if m.group(1) and d <= sunday:
-                d += timedelta(days=7)
-            return d, d
+        days_named = []
+        for m in re.finditer(rf"\b(next )?{_WEEKDAY_RE}\b", t):
+            days_named.append((bool(m.group(1)), [w[:3] for w in WEEKDAYS].index(m.group(2)[:3])))
+        for word, idx in HINDI_WEEKDAYS.items():
+            if re.search(rf"\b{word}\b", t):
+                days_named.append(("agle" in t, idx))
+        if days_named:  # "wednesday or thursday" → that span
+            found = []
+            for nxt, wanted in days_named:
+                d = today + timedelta(days=(wanted - today.weekday()) % 7)
+                if nxt and d <= sunday:
+                    d += timedelta(days=7)
+                found.append(d)
+            return min(found), max(found)
         months = "|".join(MONTHS)
         m = re.search(rf"\b(\d{{1,2}})(?:st|nd|rd|th)? ({months})[a-z]*\b", t) or re.search(
             rf"\b({months})[a-z]* (\d{{1,2}})(?:st|nd|rd|th)?\b", t
@@ -218,6 +266,12 @@ class RuleModel:
         for word, (start, end) in TIME_PARTS.items():
             if re.search(rf"\b{word}s?\b", t):
                 window = {"earliest": start.isoformat("minutes"), "latest": end.isoformat("minutes")}
+        if m := re.search(rf"\b(?:between|from)\s+{_TIME}\s*(?:and|to|-|till|until)\s*{_TIME}", t):
+            h1, m1, ap1, h2, m2, ap2 = m.groups()
+            end = _clock(h2, m2, ap2)
+            start = _clock(h1, m1, ap1 or (ap2 if ap2 and int(h1) <= int(h2) else None))
+            if start and end and start < end:
+                return {"earliest": start.isoformat("minutes"), "latest": end.isoformat("minutes")}
         if m := re.search(rf"\b(?:not before|after|from|no earlier than|earliest)\s+{_TIME}", t) or re.search(
             rf"\b{_TIME}\s+(?:onwards|or later)\b", t
         ):
@@ -234,7 +288,8 @@ class RuleModel:
             r"\b(?:under|below|less than|within|max(?:imum)?|up ?to|budget(?: of| is)?|not more than)\s*"
             r"(?:₹|rs\.?|inr)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k)?\b",
             t,
-        ) or re.search(r"(?:₹|rs\.?\s?)(\d[\d,]*(?:\.\d+)?)\s*(k)?\b", t)
+        ) or re.search(r"(?:₹|rs\.?\s?)(\d[\d,]*(?:\.\d+)?)\s*(k)?\b", t) or re.search(
+            r"\b(\d[\d,]*)\s*(k)?\s*(?:tak|se kam|ke andar|max|maximum|or less|at most)\b", t)
         if not m:
             return None
         value = float(m.group(1).replace(",", ""))
