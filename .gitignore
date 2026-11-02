@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.env
+*.db
+*.sqlite
+traces/*.jsonl
+!traces/sample_*.jsonl
+.DS_Store
+.vscode/
+.idea/
+data/*
+!data/.gitkeep
