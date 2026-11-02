@@ -1,0 +1,20 @@
+{
+  "city": "Bengaluru",
+  "currency": "INR",
+  "locale": "en-IN",
+  "timezone": "Asia/Kolkata",
+  "services": {
+    "plumber": {"label": "Plumber", "aliases": ["plumber", "plumbing", "tap", "leak", "pipe", "nal"]},
+    "electrician": {"label": "Electrician", "aliases": ["electrician", "electrical", "wiring", "switch", "fan", "bijli"]},
+    "ac_servicing": {"label": "AC servicing", "aliases": ["ac servicing", "ac service", "ac repair", "air conditioner", "ac"]},
+    "cleaning": {"label": "Home cleaning", "aliases": ["cleaning", "cleaner", "deep clean", "safai"]}
+  },
+  "areas": {
+    "Koramangala": ["koramangala", "kormangala", "kora"],
+    "HSR Layout": ["hsr layout", "hsr"],
+    "Indiranagar": ["indiranagar", "indira nagar"],
+    "Whitefield": ["whitefield"],
+    "Jayanagar": ["jayanagar", "jaya nagar"],
+    "BTM Layout": ["btm layout", "btm"]
+  }
+}

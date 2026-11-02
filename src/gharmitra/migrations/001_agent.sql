@@ -1,1 +1,0 @@
--- Agent schema: users, sessions, approvals, operations, refunds, receipts, facts, settings

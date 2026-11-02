@@ -1,1 +1,0 @@
--- Mock provider schema: providers, reviews, slots, holds, bookings
