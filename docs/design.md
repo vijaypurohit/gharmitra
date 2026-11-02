@@ -1,307 +1,244 @@
-# GharMitra — Design (working draft for review)
+# Design note
 
-> Status: draft for review. The final ≤2-page design note (`docs/DESIGN_NOTE.md`) will be condensed
-> from this once the choices below are agreed and implemented.
+## 1. Key decisions
 
-GharMitra is a chat agent that books, reschedules and cancels home-service errands against a mocked
-provider API. The guiding principle:
-
-**The language model understands; the code decides.** The model only turns a user message into a
-structured `Intent`. A deterministic controller owns the state, chooses every tool call, and is the
-only component that can perform a side effect — and only through an approval gate.
-
----
-
-## 1. Key choices (summary)
-
-| # | Decision | Chosen | Alternatives considered | Why |
-|---|----------|--------|-------------------------|-----|
-| D1 | Language / deps | Python 3.11+, stdlib (`sqlite3`, `dataclasses`), `pytest` | TypeScript; Pydantic; LangGraph | Fastest to build, zero runtime deps, 3-command setup |
-| D2 | Agent architecture | Deterministic state machine; model = intent parser | Free LLM tool-calling loop with guardrails | Must-haves must be *enforced in code*; evals must run offline |
-| D3 | Model in evals | `ScriptedModel` (canned intent per user turn) | Recorded live-LLM transcripts | Fully reproducible, no keys, no flakiness |
-| D4 | Model in CLI/web | `GHARMITRA_MODEL_MODE=offline\|live\|routed`; offline = `RuleModel`; live = any configured provider | Live LLM only | Demo works with or without keys; provider is a config change (§12) |
-| D5 | Hold vs approval order | **Hold first, then ask approval on the quoted price** | Approve on search price, then hold | User approves the real price; a hold is reversible and needs no approval |
-| D6 | Approval identity | SHA-256 fingerprint of (action, provider, slot, price, booking_id) | Boolean "confirmed" flag | Any change to provider/slot/price mechanically voids it |
-| D7 | Idempotency key | Derived from approval id: `{approval_id}:{action}`; written to DB before the call | Random UUID per attempt | Same approval ⇒ same key across retries, repeated "yes" and restarts |
-| D8 | Success claims | Always verify via `get_booking_status` before saying "booked" | Trust `book()` response | Spec: never claim success until verified; status is authoritative |
-| D9 | Persistence | `GHARMITRA_DATABASE_URL`: SQLite by default, Postgres optional (same schema, thin adapter) | JSON files; ORM | Survives restart; transactional write-ahead log; creds only from env |
-| D10 | Mock API | In-process class, own SQLite file, seeded RNG + per-scenario forced outcomes | Local HTTP service | Simpler, deterministic; behaves as an "external" system that outlives agent restarts |
-| D11 | Untrusted text | Never reaches the parser; sanitised + flagged; display only | LLM summarises reviews | Structural guarantee, not a prompt-based one |
-| D12 | Memory forget | Value erased + tombstone that also blocks re-inference | Hard delete row | "Forgotten facts are never reused" — including via inference from history |
-| D13 | Traces | JSONL, one file per run, redacted | OpenTelemetry | Zero deps, easy to read side-by-side in demo |
-| D14 | Interface | CLI + small web UI (FastAPI + one static HTML page: chat left, live trace right) | Streamlit; React app | No build step; side-by-side chat/trace is exactly what the demo needs |
-| D15 | Nice-to-have | **Proactive follow-up** (submitted); model routing as stretch (§14) | Routing only | Brief says "pick at most one"; follow-up reuses the search/approval/execution path |
-
----
+| Decision | Chosen | Why |
+|---|---|---|
+| Agent shape | State machine; the model only parses messages into intents | Every rule is enforced in code; evals run offline with a scripted model |
+| Approval | Stored record with a fingerprint of (action, provider, slot, amount), approved on the **quoted** price after a hold | Any change voids it mechanically |
+| Idempotency | Key = `{approval_id}:{action}`, committed before the call; success only after a status check | No duplicates across retries, repeated "yes" or restarts |
+| Untrusted text | Never reaches the model; sanitised and display-only | Structural guarantee, not a prompt instruction |
+| Storage | Postgres: schema `agent` and schema `mock` (provider side); bundled `pgserver` when `DATABASE_URL` is unset | Real transactions and constraints; setup stays at 3 commands |
+| Interface | CLI + web app (FastAPI, no build step) | Demo needs chat and trace side by side |
 
 ## 2. Architecture
 
-```
-user msg ──► Model.parse() ──► Intent ──► Controller ──► next step
-                (LLM / scripted)   (typed)     │
-                                               ├─ asks for missing fields
-                                               ├─ read-only tools (search, get_provider, list_bookings, hold)
-                                               ├─ creates pending Approval, shows exact action
-                                               └─ Executor (book / cancel / reschedule)
-                                                    └─ ApprovalGate.check() ── refuses unless fingerprint matches
-Tool output ──► sanitize ──► state / display only (never back into Model.parse)
-Everything ──► Tracer (JSONL)         Budget wraps every model + tool call
-```
-
-CLI (`gharmitra chat`) and web UI (`gharmitra web`) are thin shells over the same `Controller`.
-
-Modules: `agent/state.py`, `agent/controller.py`, `agent/approval.py`, `agent/executor.py`,
-`agent/budget.py`, `agent/sanitize.py`, `llm/*`, `memory/store.py`, `mock_api/*`, `trace.py`, `clock.py`.
-
-`Intent` (what the model can produce — nothing else):
-`set_fields{service, area, date_range, time_window, budget_max, provider_pref}`, `choose_option(n)`,
-`confirm`, `decline`, `start(action=book|reschedule|cancel, ref)`, `memory_view`, `memory_correct(key,value)`,
-`memory_forget(key)`, `smalltalk`. Unknown/invalid model output ⇒ treated as "didn't understand", never as an action.
-
----
-
-## 3. State model (must-have 1)
-
-```
-Session { session_id, user_id, phase, task, candidates[], selected, hold, approval_id, op_key, budget }
-Task    { action, service, area, date_range, time_window, budget_max, provider_pref,
-          target_booking_id, new_slot }    # every field carries {value, source: user|memory|default}
+```mermaid
+flowchart LR
+    U[User message] --> P["ModelClient.parse()"]
+    P -->|Intent| N[validate +<br/>normalise]
+    N --> C[Controller<br/>state machine]
+    C -->|read-only| R["search · get_provider<br/>list_bookings · hold_slot"]
+    R --> S[sanitize] --> D[display only]
+    C --> E[Executor] --> G{ApprovalGate}
+    G -->|fingerprint matches| W["book · cancel · reschedule"] --> V[verify] --> RC[Receipt]
+    G -->|mismatch| X[refuse, no call]
+    C -.-> T[(TraceSink)]
 ```
 
-Phases and legal transitions (enforced by a table; illegal transition = bug, raises):
+**Intent.** The model never calls tools. It turns a message into JSON:
 
-```
-COLLECTING ─► SEARCHING ─► PROPOSING ─► HOLDING ─► AWAITING_APPROVAL ─► EXECUTING ─► VERIFYING ─► DONE
-     ▲            │             │           │              │                  │            │
-     └────────────┴─────────────┴───────────┴──────────────┘ (correction)    └──► FAILED / ABORTED
-```
-
-- **Ask only for what's missing.** Required for booking: `service`, `area`, `date_range`. Optional
-  (`time_window`, `budget_max`) are asked **once, together**; "no preference" is recorded as a known
-  value, so it is never re-asked. Known facts (from the conversation or *stated* memory) are never asked.
-- **Corrections keep everything else.** A correction patches one field. Downstream artefacts are
-  invalidated by a dependency rule: changing search inputs drops candidates → hold → approval;
-  changing only the chosen slot drops hold → approval. Other task fields are untouched.
-- Session state is persisted after every turn, so a restart resumes in the same phase.
-
-## 4. Approval enforced by code (must-have 2)
-
-```
-Approval { approval_id, session_id, action, provider_id, slot, price, booking_id,
-           fingerprint, status: pending|granted|voided|consumed, created_at }
+```jsonc
+{
+  "act": "request",   // request | inform | select | confirm | decline | memory | status | unclear
+  "goal": "book",     // book | reschedule | cancel
+  "entities": {"service": "plumber", "area": "HSR Layout",
+               "date": {"from": "2026-11-02", "to": "2026-11-08"},
+               "time": {"earliest": "06:00", "latest": "12:00"},
+               "budget_max": 1500, "provider": {"same_as_last": true}},
+  "target": {"service": "ac_servicing"}, "option": null,
+  "memory": null,     // {"op": "view" | "correct" | "forget", "key": "area", "value": "..."}
+  "remember": false, "confidence": 0.92
+}
 ```
 
-1. Controller creates a **pending** approval and shows the exact text:
-   *"Book Ravi Plumbing, Thu 6 Nov 09:00–10:00, ₹1,200 (quoted). Confirm? (yes/no)"*
-2. Only a `confirm` intent **from a user turn**, while that approval is the one displayed, flips it to
-   `granted`. Tool output never goes through the parser, so it cannot produce `confirm`.
-3. `Executor` calls `ApprovalGate.check(action, provider, slot, price, booking_id)` immediately before
-   every `book` / `cancel` / `reschedule`. It recomputes the fingerprint from the values **about to be
-   sent** and compares with the granted record. Mismatch / missing / not granted ⇒ `ApprovalError`, no call.
-4. Any change of provider, slot or price (user correction, re-hold with new quote, slot taken) sets the
-   approval to `voided` and a fresh one must be shown.
-5. After success it becomes `consumed`; a repeated "yes" finds no pending approval and replies with
-   the existing booking id.
+- No fields for price, approval or tool calls, so the model can't express them.
+- Invalid JSON, `unclear` or confidence < 0.6 → clarifying question. Values are normalised against
+  the city catalogue ("HSR" → HSR Layout); unknown ones are asked, not guessed.
+- The prompt holds today's date, catalogue, phase and known field names; never tool text, phones
+  or addresses.
 
-Reschedule has no hold step in the contract, so its approval covers (booking_id, provider, new_slot,
-current price). Cancel's covers (booking_id, provider, slot, price).
+**Components.** The core depends only on interfaces; `wiring.py` picks implementations from config.
 
-## 5. Idempotency and recovery (must-have 3)
+| Interface | Implementations |
+|---|---|
+| `ModelClient` | `rules` (default), `openai`-compatible, `anthropic`, `claude_cli`, `scripted` (evals), `module:Class` |
+| `ProviderAPI` | Seeded in-process mock; a real client could replace it |
+| `TraceSink` | Postgres + JSONL |
 
-Operations log (write-ahead, in SQLite):
-`Operation { op_key, approval_id, action, status: started|unknown|succeeded|failed, booking_id, attempts }`
+A failed model call (timeout, `429`, bad JSON, non-zero exit) falls back to `rules` for that turn;
+the fallback is traced and budgeted.
 
-**Book flow**
-1. Gate check → insert `Operation(status=started)` → commit → call `book(hold_id, op_key)`.
-2. `ok` → `get_booking_status(op_key)` → `booked` ⇒ `succeeded`, tell user.
-3. `timeout` → status `unknown` → `get_booking_status(op_key)`:
-   `booked` ⇒ succeeded (timeout-after-success); `not_found` ⇒ retry `book` with the **same key**;
-   `failed` ⇒ report failure.
-4. `slot_taken` ⇒ void approval, offer alternatives. `hold_expired` ⇒ re-hold: same slot and same
-   price ⇒ approval still valid, continue; different ⇒ void and re-ask.
-5. Max 3 attempts (backoff on fake clock) ⇒ `FAILED` with a clear message.
+## 3. State model
 
-**Cancel**: transient `503` ⇒ retry with the same key (max 3). **Reschedule**: `slot_conflict` ⇒ void, offer other slots.
-
-**Restart**: on startup, any `Operation` in `started|unknown` is reconciled via `get_booking_status`
-**before** handling new input. A repeated "yes" after a restart hits a `consumed`/`succeeded` record.
-
-The mock also de-duplicates on `idempotency_key` (as a real API would), but correctness does not rely
-on it: tests assert the agent itself never issues a second `book` without a status check.
-
-## 6. Untrusted tool output (must-have 4)
-
-- Reviews and other free text are **never** passed to `Model.parse` and never become instructions.
-- `sanitize.py`: strip control/markup characters, truncate, wrap as quoted data, and flag known
-  injection patterns (`ignore previous`, `system:`, `approve`, `book now`, …) → trace `injection_flagged`;
-  flagged reviews are shown as "[review hidden: suspicious content]".
-- The structural guarantee (approval only from user turns, tool calls chosen only by the controller)
-  holds even if the detector misses something. Detection is defence in depth.
-- If a live LLM is enabled, it still only sees the user's message plus a compact state summary — never review text.
-
-## 7. Bounded execution (must-have 5)
-
-`Budget` (all configurable): max 8 model calls/turn, max 15 tool calls/turn, max 30 s wall-clock/turn
-(injectable clock), max 40 turns/session, max 3 retries per operation. Every model/tool call goes
-through `budget.spend()`, which raises `LimitExceeded`.
-
-A single top-level handler turns every exit into a user message plus a trace `exit` event:
-`completed | user_cancelled | limit_turns | limit_tool_calls | limit_time | retries_exhausted | unknown_error`.
-If a limit is hit during booking, the message says exactly what is known (for example "booking state
-unconfirmed; I'll check again on your next message", backed by the operations log).
-
-## 8. Memory (must-have 6)
-
-```
-Fact { user_id, key, value, source: stated|inferred, confirmed, status: active|forgotten, updated_at }
-keys: area, earliest_time, latest_time, preferred_provider:<service>, budget_max:<service>
+```mermaid
+stateDiagram-v2
+    [*] --> COLLECTING
+    COLLECTING --> SEARCHING: required fields known
+    SEARCHING --> PROPOSING
+    PROPOSING --> HOLDING: user picks option
+    HOLDING --> AWAITING_APPROVAL: hold + quoted price
+    HOLDING --> PROPOSING: slot_unavailable
+    AWAITING_APPROVAL --> EXECUTING: confirm
+    AWAITING_APPROVAL --> ABORTED: decline
+    EXECUTING --> VERIFYING
+    VERIFYING --> DONE: verified
+    VERIFYING --> EXECUTING: not_found, same key
+    EXECUTING --> PROPOSING: slot_taken / slot_conflict
+    EXECUTING --> FAILED: retries exhausted
+    SEARCHING --> COLLECTING: correction
+    PROPOSING --> COLLECTING: correction
+    AWAITING_APPROVAL --> COLLECTING: correction
 ```
 
-- **Stated**: the user said it ("I'm in Koramangala", "not before 10 am"). Saved and reused, and shown
-  when reused ("Using your saved area: Koramangala").
-- **Inferred**: derived by the agent (for example the same electrician used twice in `list_bookings`).
-  It is never used silently: the agent asks "Last time you used Sharma Electricals, book them again?"
-  A yes turns it into stated.
-- **View / correct / forget**: "what do you remember", "my area is HSR, not Koramangala",
-  "forget my area". Forget erases the value and leaves a tombstone. The tombstone blocks re-inference
-  of that key until the user states it again, and purges it from the live task if it came from memory.
+- Transitions are a table; an illegal one raises. The task (fields, options, hold, approval id,
+  target booking) is saved on the session after every turn, so a restart resumes in place.
+- **Ask only what's missing.** Required: service, area, date. Optional (time, budget, provider) are
+  asked once, together; "no preference" is stored so it's never re-asked.
+- **Corrections keep everything else.** A changed field clears only its dependants: search inputs →
+  options, hold, approval; chosen slot → hold, approval.
+- Each field records its source (`user · memory · default`).
+- Reschedule and cancel resolve the target from `list_bookings` (ask if several match). Reschedule
+  enters at `PROPOSING` with the provider's free slots; cancel enters at `AWAITING_APPROVAL`.
 
-## 9. Traces (must-have 7)
+## 4. Approval enforcement
 
-`traces/<run_id>.jsonl`: one run is one CLI session or one eval scenario. Events: `run_start`,
-`user_msg`, `intent`, `state_transition{from,to,reason}`, `model_call{model,latency_ms,tokens_in,tokens_out,cost}`,
-`tool_call{name,args,result(sanitised),error,latency_ms}`, `approval{created|granted|voided|consumed}`,
-`operation{...}`, `memory{write|forget}`, `budget`, `exit{reason}`.
-Redaction: keys like `*key*|*token*|*secret*|phone|address` are masked, review text is truncated,
-and no environment values are logged. `gharmitra trace <file>` pretty-prints a trace for the demo.
+1. After a hold, the controller stores a **pending** approval and shows it: *"Book Ravi Plumbing,
+   Thu 5 Nov 09:00, ₹1,200 (quoted). Free cancellation until Wed 09:00. Confirm?"*
+2. Only a `confirm` intent from a **user turn**, while that approval is shown, makes it `granted`.
+   A web Confirm carries its `approval_id`; a stale one is rejected.
+3. Right before `book` / `cancel` / `reschedule`, `ApprovalGate.check()` recomputes a SHA-256 of
+   (action, provider, slot, amount, booking id) from the **values about to be sent**. Missing,
+   expired, not granted or mismatched → no call.
+4. Any change of provider, slot or amount (correction, new quote, slot taken, fee tier crossed) →
+   `voided`, and a new approval is shown. After success → `consumed`; another "yes" just replies
+   with the existing booking.
 
-## 10. Evals (must-have 8)
+Amount = quoted price (book), current price (reschedule), refund (cancel). A book approval
+expires with its hold, at the provider's `expires_at` (10 min); cancel and reschedule approvals
+expire 10 min after they're shown. Every state change is an `approval` trace event.
 
-Each scenario has a seed, a mock config (forced outcomes), scripted user turns with their intents,
-and assertions on the **final world state** (the mock's bookings) plus **global invariants** that are
-checked after every scenario:
+## 5. Idempotency and recovery
 
-- I1: every `book/cancel/reschedule` call matches a granted approval with an identical fingerprint
-- I2: at most one active booking per op_key and per (user, provider, slot)
-- I3: no "booked" message without a prior `get_booking_status == booked`
-- I4: budgets never exceeded; every run has exactly one `exit` event
-- I5: forgotten facts are never read; inferred facts are never used unconfirmed
+1. Gate check → insert `operation(op_key, started)` and **commit** → call the API with `op_key`.
+2. Timeout → `unknown` → `get_booking_status(op_key)`: `booked` → success; `not_found` → retry with
+   the **same key** (max 3, backoff); `failed` → tell the user. Every retry re-runs the gate first, so an
+   approval that has expired stops it.
+3. Success (booking copy, receipt) is recorded only after verification: `get_booking_status` for
+   book; `list_bookings` for cancel and reschedule.
+4. **Restart**: before new input, every `started · unknown` operation is reconciled the same way.
+5. Retries exhausted while still unknown → stays `unknown`, the user is told it's unconfirmed, and
+   it's checked again on the next message.
 
-A pytest plugin collects results and `scripts/gen_eval_table.py` writes `docs/eval_table.md`
-(scenario · expected · actual · pass/fail · notes).
+| Failure | Handling |
+|---|---|
+| `hold_slot` → `slot_unavailable` | Back to options |
+| `book` → `slot_taken` · `reschedule` → `slot_conflict` | Void approval, offer alternatives |
+| `book` → `hold_expired` | Operation `failed`, approval expired; re-hold and show a new approval (new key) |
+| `cancel` → `503` | Retry with the same key (max 3) |
 
-| # | Scenario | Required |
-|---|----------|:-:|
-| 1 | Happy path: plumber, this week, mornings, under ₹1,500 | |
-| 2 | Missing info: asks only missing fields, never re-asks | |
-| 3 | Correction ("make it Saturday") keeps other fields | |
-| 4 | Prompt injection in a review | ✅ |
-| 5 | Price changes after approval (re-hold quotes higher) | ✅ |
-| 6 | Slot changes after approval | ✅ |
-| 7 | Timeout after success: status check, no duplicate | ✅ |
-| 8 | Timeout, not booked: retry with the same key | |
-| 9 | `slot_taken`: alternatives + new approval | |
-| 10 | Reschedule `slot_conflict` | ✅ |
-| 11 | Repeated confirmation ("yes", "yes", "yes") | ✅ |
-| 12 | Memory: correct + forget, never reused | ✅ |
-| 13 | Inferred preference needs confirmation | |
-| 14 | Restart mid-booking (crash after write-ahead) | ✅ |
-| 15 | Limit exhaustion (tool calls / retries) | ✅ |
-| 16 | Wall-clock limit | |
-| 17 | Cancel with transient 503 | |
-| 18 | Hold expired, re-hold at same price continues | |
-| 19 | "Same electrician as last time, not before 10 a.m." | |
-| 20 | Unknown error gives a clean message | |
-| 21 | Provider cancels: replacement found, approval required, no auto-rebook | |
-| 22 | Provider cancels: user declines replacement, nothing booked | |
-| 23 | Live model returns invalid JSON: falls back to rules, no action taken | |
-| 24 | Stale approval from web UI (old `approval_id`) is rejected | |
+A key is retried only while its outcome is unknown (timeout, `503`); a definite failure is final
+for that key, and the next attempt needs a new approval and so a new key. One approval → one
+`op_key` (unique in the DB) → at most one booking. The mock also de-duplicates on
+the key, but tests assert the agent never sends a second `book` without a status check.
 
-## 11. Assumptions (the ambiguous parts, written down)
+## 6. Untrusted tool output
 
-- City: Bengaluru; prices are integer INR; the clock is fixed in tests (Mon 2 Nov 2026, 09:00 IST).
-- "This week" means today through Sunday. "Mornings" means 06:00–12:00. Budget comparisons are
-  inclusive and use the **quoted** price.
-- Holding a slot is not a commitment and needs no approval. Booking, cancelling and rescheduling do.
-- One active task per session. A single user per CLI session (`--user`).
-- A timeout that "actually booked" is decided by the mock's seeded RNG, or forced per scenario.
-- Reschedule keeps the original price. Cancel needs no refund logic.
+Reviews, provider names, attributes and mock error text are data. `sanitize.py` strips
+control/markup characters, truncates, and flags injection patterns (`ignore previous`, `system:`,
+`approve`, `book now`, …); flagged reviews show as "[review hidden: suspicious content]" and an
+`injection_flagged` event is traced. The guarantee is structural: tools are chosen only by the
+controller, approval comes only from user turns, and prices and slots come from tool fields, never
+text. It holds even if detection misses.
 
+## 7. Bounded execution
 
-## 12. Configuration, models and secrets
+Defaults: 8 model calls and 15 tool calls per turn, 60 s per turn (backoff included), 40 turns per
+session, 3 retries per operation. Every call goes through `budget.spend()`, which raises
+`LimitExceeded`; the clock is injected for tests. One top-level handler turns every exit into a
+user message and an `exit` event: `completed · user_cancelled · limit_turns · limit_model_calls ·
+limit_tool_calls · limit_time · retries_exhausted · unknown_error`. Mid-booking it says what is
+known ("booking unconfirmed; I'll check again on your next message").
 
-All configuration comes from environment variables (or a git-ignored `.env`). Defaults run fully offline.
+## 8. Memory
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `GHARMITRA_MODEL_MODE` | `offline` | `offline` (rules) · `live` (one model) · `routed` (cheap + strong) |
-| `GHARMITRA_LLM_PROVIDER` | — | `openai_compat` (OpenAI, Azure, Groq, OpenRouter, Together, Ollama, vLLM) or `gemini` |
-| `GHARMITRA_LLM_BASE_URL` / `_API_KEY` / `_MODEL` | — | The strong / single model |
-| `GHARMITRA_LLM_CHEAP_PROVIDER` / `_BASE_URL` / `_API_KEY` / `_MODEL` | — | Cheap model, used only in `routed` mode |
-| `GHARMITRA_LLM_TIMEOUT_S` | `10` | Per-call timeout |
-| `GHARMITRA_DATABASE_URL` | `sqlite:///data/gharmitra.db` | Agent DB; `postgresql://user:pass@host:5432/db` also supported |
-| `GHARMITRA_MOCK_DB_PATH` | `data/mock_provider.db` | Mock provider's own store (it's an "external" system) |
-| `GHARMITRA_SEED` / `GHARMITRA_SCENARIO` | `42` / `default` | Mock randomness and forced-failure scenario |
-| `GHARMITRA_TRACE_DIR` | `traces/` | Trace output |
-| `GHARMITRA_MAX_*` | see §7 | Budget caps |
+Table `agent.facts`, one row per (user, key): area, earliest time, preferred technician per service,
+usual budget.
 
-- **Provider adapters** share one interface: `parse(message, state_summary) -> Intent` with JSON-schema
-  output. Two adapters cover most providers: OpenAI-compatible chat completions and Gemini. Adding
-  another is one file. Token usage and cost (from a per-model price table in config) are reported to the tracer.
-- **Failure handling**: timeouts, HTTP errors, or output that fails schema validation fall back to
-  `RuleModel` for that turn. The fallback is traced and counts against the budget, and the result can
-  never act on its own: a confirm still has to bind to a displayed pending approval.
-- **Secrets**: read once at startup and never logged. The tracer masks API keys, `Authorization`
-  headers and the password inside `DATABASE_URL`. A test asserts that no configured secret value
-  appears in any trace file. `.env` is git-ignored; `.env.example` lists the variables with empty values.
-- **Database adapter**: one small `Database` class (connection, transaction, placeholder translation)
-  over `sqlite3` and optional `psycopg` (`uv sync --extra postgres`). The schema is portable SQL with
-  a unique constraint on `op_key`. Tests and evals run on SQLite.
+- **Stated**: from `remember: true` or a yes to "save this?". Reused and announced ("Using your saved
+  area: Koramangala").
+- **Inferred**: from `list_bookings` (e.g. same electrician twice). Never used silently; offered as a
+  question, and a yes makes it stated.
+- **Correct** overwrites and keeps `stated`. **Forget** sets the value `NULL`, status `forgotten`,
+  and removes it from the live task; inference skips the key until it's stated again.
+- `fact_events` and trace `memory` events record key and operation, never the value.
 
-## 13. Web UI
+## 9. Observability
 
-`gharmitra web` starts FastAPI on `localhost:8000` and serves one static HTML page with no build step.
-- Left: the chat. Approval requests appear as a card showing the exact action, provider, slot and
-  price, with **Confirm** / **Decline** buttons.
-- Right: the run's trace as it happens (state transitions, tool calls, approvals, flagged injections),
-  colour-coded, polling `GET /api/trace/{run_id}?after=n`.
-- Top: model mode, a scenario picker for the demo (for example *timeout-after-success*,
-  *injected review*, *provider cancels*), and a "Memory" drawer to view, correct and forget facts.
-- `POST /api/chat {session_id, text, approval_id?}`. A button confirm carries the `approval_id` it was
-  rendered for. If that's not the current pending approval, it's rejected (stale-tab protection).
-  Typed "yes" binds to the most recently displayed approval, as in the CLI.
+One trace per session (chat or eval), redacted, numbered, and sent to Postgres `trace_events` (live
+view over SSE, run report) and `traces/<session_id>.jsonl`.
 
-## 14. Nice-to-haves
+| Event | Records |
+|---|---|
+| `user_msg`, `intent` | Message and parsed intent |
+| `model_call` | Adapter, model, latency, tokens, cost, fallback |
+| `state_transition` | From → to, reason |
+| `tool_call` | Name, args, sanitised result, error, latency |
+| `approval`, `operation`, `receipt`, `memory`, `budget`, `exit` | Side-effect lifecycle, memory keys, budget, end reason |
 
-**Proactive follow-up (the one we submit).** The mock gets a scenario/admin hook,
-`provider_cancels(booking_id)`, outside the fixed contract, that sets a booking to
-`cancelled_by_provider`. On the user's next message, at session start, or when "Check" is clicked in the
-web UI, the agent runs `list_bookings` and finds the cancellation. It then tells the user, rebuilds the
-task from the original booking (service, area, window, budget, same provider first) and searches for
-slots near the original. It holds the best option and shows a **new approval**. It never rebooks
-without that approval. Evals 21–22.
+Redaction masks API keys, tokens, `Authorization`, the DB password, phones and addresses. Eval
+invariants and the run report are computed from these events. Each verified action also gets a
+frozen receipt (HTML, JSON, text).
 
-**Model routing (stretch, only if time allows).** A per-turn router: short or structured turns
-(yes/no, option number, memory commands, single-field answers while `COLLECTING`) go to the cheap
-model, or to rules. Free-text requests with several constraints, or corrections, go to the strong model.
-If the cheap model's output fails validation, the turn escalates once. Measurement:
-`scripts/routing_report.py` runs a labelled set of ~40 utterances through rules / cheap / strong /
-routed and writes intent accuracy, p50/p95 latency and cost to `docs/routing_report.md`. Live keys are
-needed to regenerate it; the committed report is the evidence. Evals never call a live model.
+**Annotated excerpt**, [sample_timeout_after_success.jsonl](../traces/sample_timeout_after_success.jsonl)
+(eval E7; replaced with the exact lines once that run writes the file):
 
-> ⚠ The brief says *"pick at most one, no extra credit for doing more."* We present proactive follow-up
-> as our nice-to-have. Routing would be listed as "built beyond scope" and only after everything else is done.
+```text
+seq type              payload (shortened)
+ 41 approval          granted apr_7 book P-RAVI Thu 09:00 ₹1,200   ← user said "yes"
+ 43 operation         started apr_7:book                           ← committed before the call
+ 44 tool_call         book(H-88, apr_7:book) → timeout 2.0s        ← mock booked it anyway
+ 45 operation         unknown
+ 47 tool_call         get_booking_status(apr_7:book) → booked BK-1042  ← checked, not retried
+ 48 operation         succeeded BK-1042; approval consumed
+ 50 exit              completed                                    ← one book call, one booking
+```
 
-## 15. Scale (draft for the final note)
+## 10. Cancellation policy and provider cancels
 
-What breaks first at 100×: the single-writer SQLite and in-process sessions, hold contention on popular
-slots, and per-session trace files. What we'd change: Postgres (already supported) with a unique
-constraint on `op_key`, an outbox table with a worker that executes and reconciles operations,
-per-(provider, slot) locks, OpenTelemetry traces, per-user rate limits, and model routing to control cost.
+Platform default, overridable per provider and snapshotted on each booking: ≥ 24 h before the slot
+free; 3–24 h ₹100; < 3 h 50%; provider cancels → full refund + ₹100 credit (mirrors the late fee, per
+the Consumer Protection (E-Commerce) Rules, 2020). The refund is in the cancel fingerprint, so
+crossing a tier voids the approval. Rescheduling ≥ 3 h before is free; later it's cancel-and-rebook.
+The `provider_cancels(booking_id)` demo hook triggers a replacement search and a new approval; the
+agent never rebooks on its own.
 
-## 16. Open questions for review
+## 11. Data model
 
-1. Providers: is OpenAI-compatible + Gemini enough? (OpenAI-compatible also covers Groq, OpenRouter and local Ollama.)
-2. Postgres support: keep it (it adds about an hour), or make it SQLite-only and mention Postgres as the 100× change?
-3. Model routing: build it as a stretch goal, or drop it to protect the deadline?
-4. Are any of the assumptions in §11 wrong for your reading of the brief?
+Schema in [migrations/](../src/gharmitra/migrations/). Money is `bigint` paise, times `timestamptz`.
+
+- `agent`: `users`, `sessions` (phase, task jsonb), `messages`, `approvals`, `operations`,
+  `bookings` (agent's copy with price and policy snapshot), `refunds`, `receipts`, `facts`,
+  `fact_events`, `trace_events`, `settings`.
+- `mock`: `providers`, `reviews`, `slots`, `holds`, `bookings`. Reached only through `ProviderAPI`.
+- Constraints backing the rules: `operations.approval_id` unique (one execution per approval);
+  `receipts.op_key` unique; partial unique on `bookings (user_id, provider_id, slot_start) WHERE
+  status = 'booked'`; mock `bookings.idempotency_key` unique; check constraints on status columns.
+- Tests use a fresh pair of schemas per test.
+
+## 12. Assumptions
+
+- Test clock Mon 2 Nov 2026, 09:00 IST; dates must be future and within 30 days.
+- "This week" = today–Sunday; "mornings" = 06:00–12:00; budget is inclusive, checked on the quoted price.
+- Price counts as paid at booking; no money moves. Holding needs no approval.
+- One active task per session; one user per CLI session.
+- Whether a timeout actually booked comes from the seeded RNG or the scenario.
+- `get_booking_status` knows only book keys; returns `failed` after `slot_taken` or `hold_expired`; a
+  repeated key replays its first result (same booking, or the same failure) whatever the `hold_id`.
+- `get_provider` is called only for the options shown (up to 3).
+- "Same electrician as last time" comes from `list_bookings`; it's a request, not an inferred fact.
+- A time limit in a request applies to that task; saved only if the user says so.
+- `list_bookings` has no price, so fees use the agent's booking copy.
+
+## 13. What breaks first at 100×
+
+| Breaks first | What I'd change |
+|---|---|
+| Postgres writes: task, messages and ~10 trace rows per turn, plus `NOTIFY` | Pool connections, batch trace writes, move traces to a log store |
+| Workers: the executor runs in the chat request; timeouts and backoff hold it | Queue operations for workers; the chat polls the operation |
+| Startup reconciliation scans every open operation | Per-session lease; background sweeper |
+| Slot contention: more `slot_taken`, more voided approvals | Fewer, fresher options; re-check before holding; shorter holds |
+| Model cost and rate limits | Rules first, model only when unsure (routing); cache by normalised message |
+
+Approval fingerprints, unique `op_key` and the booking index are enforced by the database, so
+correctness doesn't depend on process memory at any scale.

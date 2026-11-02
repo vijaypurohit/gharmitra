@@ -1,1 +1,1 @@
-"""FastAPI app: /api/chat, /api/trace, /api/memory, static UI."""
+"""FastAPI app and static UI."""

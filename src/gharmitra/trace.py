@@ -1,1 +1,1 @@
-"""One JSONL trace per run with redaction."""
+"""Tracer: numbered, redacted events per session, to Postgres trace_events and traces/<session_id>.jsonl."""

@@ -1,1 +1,1 @@
-"""Shared fixtures: fake clock, temp DB, mock API, eval result collector."""
+"""Shared fixtures: fake clock, bundled Postgres, fresh schemas per test, seeded mock API, traces in a temp dir."""

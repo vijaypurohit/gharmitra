@@ -15,3 +15,4 @@ traces/*.jsonl
 .idea/
 data/*
 !data/.gitkeep
+.claude/

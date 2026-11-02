@@ -1,25 +1,27 @@
+<img src="src/gharmitra/web/static/logo.svg" width="56" alt="logo">
+
 # GharMitra
 
-GharMitra ("home helper") is a chat agent that books, reschedules and cancels home-service errands
-(plumbers, electricians, AC servicing and so on) against a mocked provider API. It never double-books,
-never acts without your approval, and is not swayed by instructions hidden in provider reviews.
+GharMitra ("home helper") is a chat assistant that books, reschedules and cancels home services
+(plumbers, electricians, AC servicing, cleaning) in Bengaluru against a mocked provider API. It never
+double-books, never acts without your approval, and ignores instructions hidden in provider reviews.
 
-Everything runs locally. There are no real providers, payments or external services, and no LLM key
-is needed.
+Everything runs locally: no real providers, no payments, and no LLM key needed.
 
-> Status: work in progress. See [docs/design.md](docs/design.md) for the design.
+> Status: work in progress.
 
 ## Quick start
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
+Requires [uv](https://docs.astral.sh/uv/) only. No `.env`, database setup or model key.
 
 ```bash
-uv sync                    # install
+uv sync                    # install (includes a bundled Postgres)
 uv run pytest              # unit tests + evals, writes docs/eval_table.md
-uv run gharmitra web       # web UI at http://localhost:8000 (chat + live trace)
+uv run gharmitra web       # chat + live trace at http://localhost:8000
 ```
 
-Prefer the terminal? `uv run gharmitra chat`. To follow its trace, run `tail -f traces/latest.jsonl` in a second terminal.
+Terminal instead: `uv run gharmitra chat`, and `tail -f traces/latest.jsonl` in a second terminal
+for the trace.
 
 ## Example
 
@@ -28,71 +30,146 @@ you> Find a plumber for my kitchen tap this week, mornings only, under ₹1,500
 gm > Which area are you in?
 you> Koramangala
 gm > 3 options:
-     1. Ravi Plumbing    ★4.6  Thu 6 Nov 09:00  ₹1,200
-     2. QuickFix Pipes   ★4.3  Wed 5 Nov 10:00  ₹950
-     3. HomeCare Plumb   ★4.1  Fri 7 Nov 08:00  ₹1,400
+     1. Ravi Plumbing    ★4.6  Thu 5 Nov 09:00  ₹1,200
+     2. QuickFix Pipes   ★4.3  Wed 4 Nov 10:00  ₹950
+     3. HomeCare Plumb   ★4.1  Fri 6 Nov 08:00  ₹1,400
 you> 1
 gm > Holding the slot. The provider quoted ₹1,200.
-     Book Ravi Plumbing, Thu 6 Nov 09:00, ₹1,200? (yes/no)
+     Book Ravi Plumbing, Thu 5 Nov 09:00, ₹1,200? (yes/no)
 you> yes
-gm > Booked and verified. Booking id BK-1042.
+gm > Booked and verified. Booking id BK-1042, receipt RCPT-2026-000001.
 ```
 
-Other requests it handles: *"Move my AC servicing to Saturday"*, *"Book the same electrician as last
-time, but not before 10 a.m."*, *"Cancel my cleaning booking"*, *"What do you remember about me?"*,
-*"Forget my area"*.
+Also: *"Move my AC servicing to Saturday"*, *"Book the same electrician as last time, but not before
+10 a.m."*, *"Cancel my cleaning booking"* (shows fee and refund first), *"What do you remember about
+me?"*, *"Forget my area"*.
 
 ## How it works
 
-- **The language model understands; the code decides.** The model only turns a message into a typed
-  intent. A state machine decides what to ask and which tool to call.
-- **Approval is a record.** Book, cancel and reschedule go through a gate that compares the exact
-  action, provider, slot and price with the approval the user gave. Any change voids it.
-- **No double bookings.** The idempotency key is derived from the approval and written to the database
-  before calling the API. Timeouts are resolved through `get_booking_status`, including after a restart.
-- **Untrusted text stays data.** Reviews never reach the intent parser and can't grant approval.
-- **Bounded.** Hard caps on turns, model calls, tool calls and time. Every exit ends with a clear message.
-- **Memory with provenance.** Preferences are marked *stated* or *inferred*. Inferred ones need
-  confirmation, and forgotten ones are never reused.
-- **Traces.** One redacted JSONL trace per run in `traces/`.
+The model only turns a message into a small JSON intent; a state machine decides what to ask and
+which tool to call. Details in the [design note](docs/design.md).
+
+- **Approval is a record**: book, cancel and reschedule pass a gate that compares action, provider,
+  slot and amount with what you approved. Any change voids it.
+- **No double bookings**: the idempotency key comes from the approval and is saved before the call;
+  timeouts are resolved through `get_booking_status`, including after a restart.
+- **Untrusted text stays data**: reviews never reach the model and can't grant approval.
+- **Bounded**: caps on turns, model calls, tool calls and time; every exit ends with a clear message.
+- **Memory**: area, earliest time and preferred technician, marked *stated* or *inferred*; you can
+  view, correct and forget them.
+- **Traces**: a redacted step-by-step log of each session, in Postgres and `traces/*.jsonl`.
+
+## Models
+
+The default `rules` parser runs offline. To use an LLM, copy a block from
+[.env.example](.env.example) (Gemini, OpenAI, Anthropic, `claude` CLI, Ollama, LM Studio, OpenRouter,
+Groq) into `.env`. Switching provider is config only: `MODEL_ADAPTER`, `MODEL_BASE_URL`,
+`MODEL_NAME`, `MODEL_API_KEY`. A failed or invalid model reply falls back to `rules` for that turn.
+
+Check a model: `uv run gharmitra check-model "plumber in HSR tomorrow morning"`, or **Test model** in
+Settings.
+
+## Web app
+
+`uv run gharmitra web` serves plain HTML, CSS and ES modules (no build step) at
+<http://localhost:8000>.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ [logo] GharMitra   Chat · Bookings · Memory · Settings   model ● ☾      │
+├───────────────────────────────────────┬────────────────────────────────┤
+│ chat                                  │ trace (live)                    │
+│  you: plumber in HSR, mornings…       │ 09:00:01 intent request/book    │
+│  ┌ Approve booking ───────────────┐   │ 09:00:01 → SEARCHING            │
+│  │ Ravi Plumbing · Thu 5 Nov 09:00│   │ 09:00:02 tool search_providers  │
+│  │ ₹1,200 quoted                  │   │ 09:00:03 ⚠ injection_flagged    │
+│  │ [Confirm]  [Decline]           │   │ 09:00:05 approval created       │
+│  └────────────────────────────────┘   │                                 │
+│ [ type a message…              ] [↵]  │ filter: all · tools · approvals │
+└───────────────────────────────────────┴────────────────────────────────┘
+```
+
+| Page | What it does |
+|---|---|
+| Chat | Conversation with the live trace beside it (a tab on mobile) |
+| Bookings | Status, fees, refunds, receipts; cancel / reschedule start a chat flow, so they still need approval |
+| Memory | Saved facts with *stated* / *inferred* badges; correct or forget each |
+| Settings | Model and Test model, locale, budgets, cancellation policy, demo scenario; API keys shown only as set / not set |
+
+<details>
+<summary>HTTP API</summary>
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/sessions` | Start a session → `{session_id}` |
+| `GET /api/sessions/{id}/messages` | Chat history |
+| `POST /api/chat` | `{session_id, text, approval_id?}` → agent messages, approval card, phase |
+| `GET /api/sessions/{id}/events` | Live trace (Server-Sent Events) |
+| `GET /api/sessions/{id}/report` | Run report |
+| `GET /api/bookings` | Bookings with status, fees and refunds |
+| `GET /api/receipts/{receipt_no}` | Receipt (JSON, or HTML with `Accept: text/html`) |
+| `GET /api/policy` | Current cancellation policy |
+| `GET` · `PUT` · `DELETE /api/memory[/{key}]` | View, correct, forget |
+| `GET` · `PUT /api/settings` | Read / update settings |
+| `POST /api/settings/test-model` | Parse a sample message → intent, latency, cost |
+
+</details>
+
+## Configuration
+
+Nothing is required. Env vars or a `.env` file (see [.env.example](.env.example)) set defaults and
+hold secrets; Settings can override non-secret values. Order: code defaults < env < Settings.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | bundled Postgres in `data/pg` | Postgres; migrations run at startup |
+| `TEST_DATABASE_URL` | `DATABASE_URL` | Where tests create and drop schemas |
+| `MODEL_ADAPTER` | `rules` | `rules` · `openai` · `anthropic` · `claude_cli` · `module:Class` |
+| `MODEL_BASE_URL` · `MODEL_NAME` · `MODEL_API_KEY` | — | Endpoint, model id, key (env only, never stored or shown) |
+| `MODEL_TIMEOUT_S` · `MODEL_MIN_INTERVAL_S` | `30` · `0` | Call timeout; gap between calls for free tiers |
+| `TRACE_SINKS` | `postgres,jsonl` | Where traces go |
+| `CITY` · `CURRENCY` · `TIMEZONE` | `bengaluru` · `INR` · `Asia/Kolkata` | Locale |
+| `SEED` · `SCENARIO` | `42` · `default` | Mock randomness and forced failures (timeout after success, injected review, provider cancels) |
+
+Budgets, cancellation policy and trace retention are edited in Settings. City data lives in
+`src/gharmitra/cities/`; adding a city is one file.
+
+## Tests
+
+- `uv run pytest`: unit tests and 30+ eval scenarios, offline and reproducible with a scripted model
+  and seeded mock. Every eval also checks invariants such as "no booking without a matching
+  approval". Writes [docs/eval_table.md](docs/eval_table.md).
+- `uv run pytest -m live`: optional checks against the configured model. Skipped by default.
+
+See the [test plan](docs/test-plan.md).
 
 ## Project layout
 
 ```
 src/gharmitra/
-  agent/       state machine, approval gate, executor, budget, sanitiser
-  llm/         model interface; scripted, rule-based, live adapters and router
+  agent/       state machine, intent validation, approval gate, executor, cancellation, budget, sanitiser
+  llm/         model interface, prompt builder and adapters
   memory/      user preference store
-  mock_api/    the fixed-contract provider API with seeded failures
-  web/         FastAPI app + single-page UI
-  config.py    env-based settings
-  trace.py     JSONL tracer
-  cli.py       chat interface
-tests/
-  unit/        component tests
-  evals/       scripted end-to-end scenarios with invariant checks
-scripts/       eval table generator
-docs/          design note, eval table, bug log, sample trace
+  mock_api/    fixed-contract provider API and seeded failures
+  web/         FastAPI app and static UI
+  cities/      city catalogue (services, areas, aliases); one JSON file per city
+  migrations/  SQL migrations, shipped with the package
+  wiring.py    picks the configured implementation of each component
+  db.py · trace.py · receipts.py · config.py · catalogue.py · clock.py · money.py · cli.py
+tests/         unit tests and eval scenarios (evals/ also writes the eval table)
+docs/          design note, plans, eval table, bug log
+traces/        JSONL traces; sample_*.jsonl are committed
 ```
 
-## Configuration
+## Deliverables
 
-Everything is set through environment variables or a `.env` file (see [.env.example](.env.example)).
-The defaults run fully offline.
+| Item | Where |
+|---|---|
+| Design note | [docs/design.md](docs/design.md) |
+| Eval table (generated) | [docs/eval_table.md](docs/eval_table.md) |
+| Three bugs and their regression tests | [docs/BUGS.md](docs/BUGS.md) |
+| Trace with a timeout after success | [traces/sample_timeout_after_success.jsonl](traces/sample_timeout_after_success.jsonl) |
+| Demo video | link added after recording |
 
-- **Model mode**: `GHARMITRA_MODEL_MODE=offline|live|routed`. Live mode works with any
-  OpenAI-compatible endpoint (OpenAI, Azure, Groq, OpenRouter, Ollama, vLLM) or Gemini. Routed mode
-  sends simple turns to a cheap model and hard ones to a strong model.
-- **Database**: `GHARMITRA_DATABASE_URL`, SQLite by default; Postgres with `uv sync --extra postgres`.
-- **Demo scenarios**: `GHARMITRA_SCENARIO` forces failures such as a timeout after success, an injected
-  review or a provider cancellation. They can also be picked in the web UI.
-
-Tests and evals always use a scripted model and never call a live LLM. Secrets are never written to traces.
-
-## Docs
-
-- [Requirements](docs/requirements.md)
-- [Design](docs/design.md)
-- Eval table: `docs/eval_table.md` (generated by `uv run pytest`)
-- Bug log: `docs/BUGS.md`
-- Sample trace (timeout after success): `traces/sample_timeout_after_success.jsonl`
+Also: [requirements](docs/requirements.md), [implementation plan](docs/implementation-plan.md),
+[test plan](docs/test-plan.md).
